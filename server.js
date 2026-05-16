@@ -31,7 +31,7 @@ async function connectToWhatsApp() {
         auth: state,
         printQRInTerminal: true,
         logger: pino({ level: 'silent' }),
-        browser: ['WR POS Cloud', 'Chrome', '1.0.0'],
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -44,6 +44,7 @@ async function connectToWhatsApp() {
             console.log('=========================================\n');
         }
         if (connection === 'close') {
+            console.error('Disconnect Reason:', lastDisconnect?.error);
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Connection closed. Reconnecting:', shouldReconnect);
             if (shouldReconnect) {
