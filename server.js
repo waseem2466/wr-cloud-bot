@@ -25,6 +25,16 @@ server.listen(PORT, () => {
 
 async function connectToWhatsApp() {
     console.log('Starting WR POS Cloud WhatsApp Bot...');
+    
+    // Auto-extract auth.zip if baileys_auth_info doesn't exist
+    if (!fs.existsSync('baileys_auth_info') && fs.existsSync('auth.zip')) {
+        console.log('📦 Extracting auth.zip to restore WhatsApp session...');
+        const AdmZip = require('adm-zip');
+        const zip = new AdmZip('auth.zip');
+        zip.extractAllTo('.', true);
+        console.log('✅ Auth session restored!');
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info');
     
     const sock = makeWASocket({
