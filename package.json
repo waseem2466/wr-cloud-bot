@@ -1,0 +1,17 @@
+{
+  "name": "wr-cloud-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "Standalone WhatsApp AI Bot for WR POS",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.5",
+    "qrcode-terminal": "^0.12.0",
+    "dotenv": "^16.4.5",
+    "pino": "^9.0.0",
+    "node-fetch": "^2.7.0",
+    "pg": "^8.11.5"
+  }
+}
