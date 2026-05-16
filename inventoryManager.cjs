@@ -15,11 +15,10 @@ const dotenv = require('dotenv');
 const crypto = require('crypto');
 const fetch = require('node-fetch');
 
-const { app } = require('electron');
-const envPath = app && app.isPackaged
-    ? path.join(process.resourcesPath, '.env')
-    : path.join(__dirname, '.env');
+
+const envPath = path.join(__dirname, '.env');
 dotenv.config({ path: envPath });
+const app = { isPackaged: false, getPath: () => __dirname };
 
 let pool;
 function getPool() {
