@@ -54,6 +54,8 @@ async function connectToWhatsApp() {
             const senderJid = isGroup ? (msg.key.participant || msg.key.remoteJid) : msg.key.remoteJid;
             const replyTo = msg.key.remoteJid;
             
+            if (senderJid === 'status@broadcast' || replyTo === 'status@broadcast') continue;
+
             console.log(`[Message] from ${senderJid}: "${text}"`);
 
             // 1. Handle Owner Commands
