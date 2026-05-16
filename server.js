@@ -1,5 +1,5 @@
 
-const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
@@ -26,22 +26,26 @@ server.listen(PORT, () => {
 async function connectToWhatsApp() {
     console.log('Starting WR POS Cloud WhatsApp Bot...');
     
-    // Auto-extract auth.zip if baileys_auth_info doesn't exist
-    if (!fs.existsSync('baileys_auth_info') && fs.existsSync('auth.zip')) {
-        console.log('📦 Extracting auth.zip to restore WhatsApp session...');
+    // Auto-extract auth.bin if baileys_auth_info doesn't exist
+    if (!fs.existsSync('baileys_auth_info') && fs.existsSync('auth.bin')) {
+        console.log('📦 Extracting auth.bin to restore WhatsApp session...');
         const AdmZip = require('adm-zip');
-        const zip = new AdmZip('auth.zip');
+        const zip = new AdmZip('auth.bin');
         zip.extractAllTo('.', true);
         console.log('✅ Auth session restored!');
     }
 
     const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info');
+    let { version } = await fetchLatestBaileysVersion();
     
     const sock = makeWASocket({
+        version,
         auth: state,
         printQRInTerminal: true,
         logger: pino({ level: 'silent' }),
-        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        browser: Browsers.ubuntu('Chrome'),
+        syncFullHistory: false,
+        markOnlineOnConnect: true
     });
 
     sock.ev.on('creds.update', saveCreds);
