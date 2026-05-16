@@ -4,6 +4,7 @@ const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const dotenv = require('dotenv');
+const http = require('http');
 
 dotenv.config();
 
@@ -11,6 +12,16 @@ const { handleOwnerCommand, isOwner } = require('./inventoryManager.cjs');
 const { handleGroupMessage, isWatchedGroup, registerGroup } = require('./groupWatcher.cjs');
 const { aiReply } = require('./aiReply.cjs');
 const { detectIntent } = require('./intent.cjs');
+
+// Dummy HTTP server to satisfy Cloud Providers (Railway/Koyeb/Heroku) health checks
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('WR POS Cloud Bot is running!');
+});
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`☁️ Cloud Health Server running on port ${PORT}`);
+});
 
 async function connectToWhatsApp() {
     console.log('Starting WR POS Cloud WhatsApp Bot...');
@@ -33,9 +44,11 @@ async function connectToWhatsApp() {
             console.log('=========================================\n');
         }
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Connection closed. Reconnecting:', shouldReconnect);
-            if (shouldReconnect) connectToWhatsApp();
+            if (shouldReconnect) {
+                setTimeout(connectToWhatsApp, 3000); // Wait 3 seconds to prevent rapid crash loops
+            }
         } else if (connection === 'open') {
             console.log('✅ Connected to WhatsApp successfully!');
         }
