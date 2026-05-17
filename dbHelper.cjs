@@ -58,7 +58,7 @@ async function getCustomerBalance(phone) {
     try {
         const cleanPhone = phone.replace(/[^0-9]/g, '').slice(-10);
         const res = await p.query(
-            `SELECT name, phone, "totalBalance", "paidAmount", "outstandingBalance"
+            `SELECT name, phone, total_loan, total_paid, balance
              FROM "Customer" WHERE phone LIKE $1 LIMIT 1`,
             [`%${cleanPhone}%`]
         );
@@ -67,9 +67,9 @@ async function getCustomerBalance(phone) {
         return {
             name: c.name,
             phone: c.phone,
-            totalBalance: c.totalBalance,
-            paidAmount: c.paidAmount,
-            outstandingBalance: c.outstandingBalance
+            totalBalance: c.total_loan,
+            paidAmount: c.total_paid,
+            outstandingBalance: c.balance
         };
     } catch (err) {
         console.error('[DB Helper] Customer lookup error:', err.message);
@@ -112,14 +112,23 @@ async function getCustomerByPhone(phone) {
     try {
         const cleanPhone = phone.replace(/[^0-9]/g, '').slice(-10);
         const res = await p.query(
-            `SELECT id, name, phone, "totalBalance", "paidAmount", "outstandingBalance"
+            `SELECT id, name, phone, total_loan, total_paid, balance
              FROM "Customer" WHERE phone LIKE $1 LIMIT 1`,
             [`%${cleanPhone}%`]
         );
-        return res.rows.length > 0 ? res.rows[0] : null;
+        if (res.rows.length === 0) return null;
+        const c = res.rows[0];
+        return {
+            id: c.id,
+            name: c.name,
+            phone: c.phone,
+            totalBalance: c.total_loan,
+            paidAmount: c.total_paid,
+            outstandingBalance: c.balance
+        };
     } catch (err) {
         console.error('[DB] Customer lookup error:', err.message);
-        return null;
+        return [];
     }
 }
 
@@ -130,14 +139,14 @@ async function createOrder(customerName, customerPhone, items, paymentType = 'LO
     const subtotal = items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
     try {
         await p.query(
-            `INSERT INTO "Bill" (id, "invoiceNumber", date, "customerName", "customerId", items, subtotal, total, "paymentType", "createdAt", "updatedAt")
+            `INSERT INTO "Bill" (id, invoice_number, date, customer_name, customer_id, items, subtotal, total, payment_type, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
             [id, invoiceNumber, new Date().toISOString(), customerName, '', JSON.stringify(items),
              subtotal, subtotal, paymentType, new Date().toISOString(), new Date().toISOString()]
         );
         for (const item of items) {
             await p.query(
-                `UPDATE "Product" SET stock = GREATEST(0, stock - $1), "updatedAt" = $2 WHERE name ILIKE $3`,
+                `UPDATE "Product" SET stock = GREATEST(0, stock - $1), updated_at = $2 WHERE name ILIKE $3`,
                 [item.quantity, new Date().toISOString(), item.name]
             );
         }
@@ -154,19 +163,19 @@ async function getOrdersByPhone(phone) {
     try {
         const cleanPhone = phone.replace(/[^0-9]/g, '').slice(-10);
         const res = await p.query(
-            `SELECT id, "invoiceNumber", date, total, "paymentType", "createdAt"
-             FROM "Bill" WHERE "customerId" IN (SELECT id FROM "Customer" WHERE phone LIKE $1)
+            `SELECT id, invoice_number, date, total, payment_type, created_at
+             FROM "Bill" WHERE customer_id IN (SELECT id FROM "Customer" WHERE phone LIKE $1)
              ORDER BY date DESC LIMIT 5`,
             [`%${cleanPhone}%`]
         );
-        return res.rows;
+        return res.rows.map(r => ({ ...r, invoiceNumber: r.invoice_number }));
     } catch {
         try {
             const res = await p.query(
-                `SELECT id, "invoiceNumber", date, total, "paymentType", "createdAt"
-                 FROM "Bill" WHERE "customerName" IS NOT NULL ORDER BY date DESC LIMIT 5`
+                `SELECT id, invoice_number, date, total, payment_type, created_at
+                 FROM "Bill" WHERE customer_name IS NOT NULL ORDER BY date DESC LIMIT 5`
             );
-            return res.rows;
+            return res.rows.map(r => ({ ...r, invoiceNumber: r.invoice_number }));
         } catch { return []; }
     }
 }
@@ -175,12 +184,19 @@ async function getOverdueCustomers(daysOverdue = 7) {
     const p = getPool();
     try {
         const res = await p.query(
-            `SELECT id, name, phone, "outstandingBalance", "totalBalance", "paidAmount"
+            `SELECT id, name, phone, balance, total_loan, total_paid
              FROM "Customer"
-             WHERE "outstandingBalance" > 0
-             ORDER BY "outstandingBalance" DESC LIMIT 10`
+             WHERE balance > 0
+             ORDER BY balance DESC LIMIT 10`
         );
-        return res.rows;
+        return res.rows.map(c => ({
+            id: c.id,
+            name: c.name,
+            phone: c.phone,
+            outstandingBalance: c.balance,
+            totalBalance: c.total_loan,
+            paidAmount: c.total_paid
+        }));
     } catch (err) {
         console.error('[DB] Overdue query error:', err.message);
         return [];
