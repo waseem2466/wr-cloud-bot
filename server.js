@@ -141,8 +141,8 @@ async function connectToWhatsApp() {
                 }
             }
 
-            // Skip auto-reply to admins
-            const adminNumbers = ['0779336848', '0719336848', '0750204698'];
+            // Skip auto-reply to other admins (owner already handled above, so not skipped)
+            const adminNumbers = ['0779336848', '0750204698'];
             const isFromAdmin = adminNumbers.some(num => senderJid && senderJid.includes(num));
             if (isFromAdmin) continue;
 
