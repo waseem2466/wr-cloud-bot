@@ -161,6 +161,43 @@ async function callGroq(text, systemPrompt) {
     return reply;
 }
 
+// ─── OpenRouter Provider (free, 28+ models, no credit card) ────────────────────
+
+async function callOpenRouter(text, systemPrompt) {
+    const apiKey = (typeof process !== 'undefined' && process.env.OPENROUTER_API_KEY) || '';
+    if (!apiKey) throw new Error('No OpenRouter API key');
+
+    const model = process.env.OPENROUTER_MODEL || 'openrouter/auto';
+    console.log(`[AI] Calling OpenRouter (${model})...`);
+
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'HTTP-Referer': 'https://wr-pos.app',
+        },
+        body: JSON.stringify({
+            model,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: text }
+            ],
+            temperature: 0.7,
+            max_tokens: 200
+        })
+    });
+
+    if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`OpenRouter failed (${res.status}): ${errText}`);
+    }
+    const data = await res.json();
+    const reply = data.choices?.[0]?.message?.content;
+    if (!reply) throw new Error('No response from OpenRouter');
+    return reply;
+}
+
 // ─── Ollama Cloud Provider ────────────────────────────────────────────────────
 
 async function callOllamaCloud(text, systemPrompt) {
@@ -235,11 +272,11 @@ Keep replies under 3 sentences. Be warm and polite.${customerLine}`;
     text = cleanText;
 
     // Step 2: Build provider chain based on preferred mode
-    const allProviders = ['gemini', 'groq', 'ollama-cloud'];
+    const allProviders = ['gemini', 'groq', 'openrouter', 'ollama-cloud'];
     let chain = [];
 
     if (mode === 'auto') {
-        chain = ['gemini', 'groq'];
+        chain = ['gemini', 'groq', 'openrouter'];
     } else {
         chain = [mode];
         allProviders.forEach(p => {
@@ -265,6 +302,11 @@ Keep replies under 3 sentences. Be warm and polite.${customerLine}`;
             if (provider === 'groq') {
                 const res = await callGroq(text, currentSystemPrompt);
                 console.log(`[AI Engine] Groq success.`);
+                return res;
+            }
+            if (provider === 'openrouter') {
+                const res = await callOpenRouter(text, currentSystemPrompt);
+                console.log(`[AI Engine] OpenRouter success.`);
                 return res;
             }
             if (provider === 'ollama-cloud') {
