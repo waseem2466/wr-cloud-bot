@@ -100,7 +100,20 @@ async function connectToWhatsApp() {
 
             console.log(`[Message] from ${senderJid}: "${text}"`);
 
-            // 1. Handle Owner Commands
+            // ============ GROUP MESSAGES ============
+            // In groups: log/watch only, NEVER reply or send anything
+            if (isGroup) {
+                // Log watched group messages (price queries, product details, etc.)
+                if (isWatchedGroup(msg.key.remoteJid, msg.pushName)) {
+                    await handleGroupMessage(msg, sock);
+                    // handleGroupMessage returns result but we intentionally discard reply
+                }
+                continue; // Never reply or act on group messages
+            }
+
+            // ============ DM (1-on-1) MESSAGES ============
+
+            // Handle Owner Commands
             if (isOwner(senderJid)) {
                 const intent = detectIntent(text);
                 if (intent.startsWith('OWNER_')) {
@@ -112,21 +125,12 @@ async function connectToWhatsApp() {
                 }
             }
 
-            // 2. Ignore Admins
+            // Ignore Admins in DM (no auto-reply to admin DMs)
             const adminNumbers = ['0779336848', '0719336848', '0750204698'];
             const isFromAdmin = adminNumbers.some(num => senderJid && senderJid.includes(num));
             if (isFromAdmin) continue;
 
-            // 3. Handle Group Watcher (auto-logging items)
-            if (isGroup && isWatchedGroup(msg.key.remoteJid, msg.pushName)) {
-                const groupResult = await handleGroupMessage(msg, sock);
-                if (groupResult.handled && groupResult.reply) {
-                    await sock.sendMessage(replyTo, { text: groupResult.reply });
-                    continue;
-                }
-            }
-
-            // 4. Handle Customer AI Auto-Reply
+            // Handle Customer AI Auto-Reply
             const intent = detectIntent(text);
             let aiResponse = null;
             try {
