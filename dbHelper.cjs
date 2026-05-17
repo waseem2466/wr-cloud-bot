@@ -148,4 +148,43 @@ async function createOrder(customerName, customerPhone, items, paymentType = 'LO
     }
 }
 
-module.exports = { searchInventory, getCustomerBalance, getProductsByCategory, getAllCategories, getCustomerByPhone, createOrder };
+async function getOrdersByPhone(phone) {
+    if (!phone) return [];
+    const p = getPool();
+    try {
+        const cleanPhone = phone.replace(/[^0-9]/g, '').slice(-10);
+        const res = await p.query(
+            `SELECT id, "invoiceNumber", date, total, "paymentType", "createdAt"
+             FROM "Bill" WHERE "customerId" IN (SELECT id FROM "Customer" WHERE phone LIKE $1)
+             ORDER BY date DESC LIMIT 5`,
+            [`%${cleanPhone}%`]
+        );
+        return res.rows;
+    } catch {
+        try {
+            const res = await p.query(
+                `SELECT id, "invoiceNumber", date, total, "paymentType", "createdAt"
+                 FROM "Bill" WHERE "customerName" IS NOT NULL ORDER BY date DESC LIMIT 5`
+            );
+            return res.rows;
+        } catch { return []; }
+    }
+}
+
+async function getOverdueCustomers(daysOverdue = 7) {
+    const p = getPool();
+    try {
+        const res = await p.query(
+            `SELECT id, name, phone, "outstandingBalance", "totalBalance", "paidAmount"
+             FROM "Customer"
+             WHERE "outstandingBalance" > 0
+             ORDER BY "outstandingBalance" DESC LIMIT 10`
+        );
+        return res.rows;
+    } catch (err) {
+        console.error('[DB] Overdue query error:', err.message);
+        return [];
+    }
+}
+
+module.exports = { searchInventory, getCustomerBalance, getProductsByCategory, getAllCategories, getCustomerByPhone, createOrder, getOrdersByPhone, getOverdueCustomers };

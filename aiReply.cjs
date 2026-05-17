@@ -13,6 +13,13 @@ const fetch = require('node-fetch');
 function getKeywordReply(text) {
     const t = text.toLowerCase();
 
+    // Sinhala greeting
+    if (/\b(ආයුබෝවන්|හලෝ|අයි)\b/.test(t))
+        return `ආයුබෝවන්! 😊 WR smile and supplies වෙත සාදරයෙන් පිළිගනිමු. අපි ඔබට උදව් කරන්නේ කෙසේද?`;
+    // Tamil greeting
+    if (/\b(வணக்கம்|ஹலோ)\b/.test(t))
+        return `வணக்கம்! 😊 WR smile and supplies க்கு வரவேற்கிறோம். நாங்கள் உங்களுக்கு எவ்வாறு உதவ முடியும்?`;
+
     if (/\b(hi|hello|hey|assalamu|alaikum|salam|good morning|good afternoon|good evening)\b/.test(t))
         return shop.greetings[Math.floor(Math.random() * shop.greetings.length)];
 
@@ -221,7 +228,8 @@ ${inventoryContext ? `LIVE INVENTORY INFO:\n${inventoryContext}\nCRITICAL: You M
 ${financialContext ? `CUSTOMER FINANCIAL STATUS:\n${financialContext}\nProvide a warm summary of their loan, paid amount, and current balance.` : (inventoryContext ? '' : `We sell: ${shop.products.join(', ')}.`)}
 Opening hours: ${shop.openingHours}.
 Contact: ${shop.phoneNumbers.join(', ')}.
-Reply politely, concisely, and in the same language the customer uses. Keep replies under 3 sentences.${customerLine}`;
+CRITICAL LANGUAGE RULE: Reply in the SAME LANGUAGE the customer wrote in — Sinhala (සිංහල), Tamil (தமிழ்), or English. Detect the language from their message and reply in it. Never mix languages.
+Keep replies under 3 sentences. Be warm and polite.${customerLine}`;
 
     // Replace text with cleaned version (without customer prefix)
     text = cleanText;

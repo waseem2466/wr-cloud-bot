@@ -63,6 +63,22 @@ function detectIntent(text) {
     if (/^\d{9,}$/.test(t.replace(/\D/g, '')) || /\b(yes|correct|that|confirm|right)\b/.test(t))
         return 'PHONE_CONFIRMATION';
 
+    // Order tracking — "where is my order", "order status", "track"
+    if (/\b(where.*order|order.*status|track.*order|delivery|shipping|my.*order)\b/.test(t))
+        return 'ORDER_TRACKING';
+
+    // Payment reminder inquiry — "when to pay", "due date", "reminder"
+    if (/\b(due|overdue|remind|reminder|when.*pay|pay.*date|due.*date|late)\b/.test(t))
+        return 'PAYMENT_DUE';
+
+    // Multi-language Sinhala/Tamil keywords
+    // Sinhala: greetings, prices, products
+    if (/\b(ආයුබෝවන්|හලෝ|මොකක්ද|කීයද|ගන්න|ඕන|තියෙනවා|ප්‍රයිස්)\b/.test(t))
+        return 'GENERAL';
+    // Tamil: greetings, prices, products
+    if (/\b(வணக்கம்|எவ்வளவு|விலை|வேணும்|இருக்கா|கிடைக்கும்|பொருள்)\b/.test(t))
+        return 'GENERAL';
+
     // Greetings
     if (/\b(hi|hello|hey|assalamu|alaikum|salam|good morning|good afternoon|good evening)\b/.test(t))
         return 'GREETING';

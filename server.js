@@ -12,7 +12,7 @@ const { handleGroupMessage, isWatchedGroup, registerGroup } = require('./groupWa
 const { aiReply } = require('./aiReply.cjs');
 const { detectIntent } = require('./intent.cjs');
 const { handlePriceQuery, handleAvailabilityQuery, getProductDetails } = require('./productPriceHandler.cjs');
-const { searchInventory, getCustomerBalance, getProductsByCategory, getAllCategories, getCustomerByPhone, createOrder } = require('./dbHelper.cjs');
+const { searchInventory, getCustomerBalance, getProductsByCategory, getAllCategories, getCustomerByPhone, createOrder, getOrdersByPhone, getOverdueCustomers } = require('./dbHelper.cjs');
 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -54,6 +54,34 @@ async function buildInventoryContext(text) {
 function extractPhoneFromJid(jid) {
     if (!jid) return null;
     return jid.replace(/@.*$/, '').replace(/[^0-9]/g, '');
+}
+
+const REMINDER_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours
+
+async function startPaymentReminders(sock) {
+    console.log('[Reminder] Payment reminder scheduler started (every 12h)');
+    const run = async () => {
+        try {
+            const overdue = await getOverdueCustomers();
+            for (const c of overdue) {
+                const phone = c.phone?.replace(/[^0-9]/g, '');
+                if (!phone) continue;
+                const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
+                const msg = `🔔 *Payment Reminder*\n\nHi ${c.name}, you have an outstanding balance of *Rs. ${c.outstandingBalance}*.\nPaid: Rs. ${c.paidAmount} of Rs. ${c.totalBalance}\n\nPlease settle soon. Bank transfer or in-store. 🏦`;
+                try {
+                    await sock.sendMessage(jid, { text: msg });
+                    console.log(`[Reminder] Sent to ${c.name} (${phone})`);
+                    await new Promise(r => setTimeout(r, 2000));
+                } catch (e) {
+                    console.error(`[Reminder] Failed for ${phone}:`, e.message);
+                }
+            }
+        } catch (e) {
+            console.error('[Reminder] Error:', e.message);
+        }
+    };
+    await run();
+    setInterval(run, REMINDER_INTERVAL);
 }
 
 async function connectToWhatsApp() {
@@ -99,6 +127,7 @@ async function connectToWhatsApp() {
             if (shouldReconnect) setTimeout(connectToWhatsApp, 3000);
         } else if (connection === 'open') {
             console.log(' Connected to WhatsApp successfully!');
+            startPaymentReminders(sock);
         }
     });
 
@@ -220,7 +249,32 @@ async function connectToWhatsApp() {
                 }
             }
 
-            // 4. Loan / balance query
+            // 4a. Order tracking — "where is my order"
+            if (intent === 'ORDER_TRACKING' && phone) {
+                const orders = await getOrdersByPhone(phone);
+                if (orders.length > 0) {
+                    const reply = '*Your Recent Orders*\n\n' + orders.map((o, i) =>
+                        `${i + 1}. #${o.invoiceNumber} — Rs. ${o.total} (${new Date(o.date).toLocaleDateString()})`
+                    ).join('\n') + '\n\n_Call us for detailed tracking._';
+                    await sock.sendMessage(replyTo, { text: reply });
+                    continue;
+                }
+                await sock.sendMessage(replyTo, { text: 'No orders found for your number. Call 0719336848 for help.' });
+                continue;
+            }
+
+            // 4b. Payment due inquiry
+            if (intent === 'PAYMENT_DUE' && customer) {
+                const due = customer.outstandingBalance;
+                if (due > 0) {
+                    await sock.sendMessage(replyTo, { text: `📋 *Payment Reminder*\n\n${customer.name}, your outstanding balance is *Rs. ${due}*.\nPaid: Rs. ${customer.paidAmount} of Rs. ${customer.totalBalance}\n\nPlease settle at your earliest. Cash deposit only. 🏦` });
+                } else {
+                    await sock.sendMessage(replyTo, { text: `✅ ${customer.name}, you have no outstanding balance. All paid up!` });
+                }
+                continue;
+            }
+
+            // 5. Loan / balance query
             let financialContext = '';
             if (intent === 'LOAN_INQUIRY' || intent === 'BALANCE_CHECK') {
                 if (customer) {
