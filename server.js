@@ -64,6 +64,7 @@ function extractPhoneFromJid(jid) {
 }
 
 const REMINDER_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours
+const knownContacts = new Set();
 
 async function startPaymentReminders(sock) {
     console.log('[Reminder] Payment reminder scheduler started (every 12h)');
@@ -74,6 +75,10 @@ async function startPaymentReminders(sock) {
                 const phone = c.phone?.replace(/[^0-9]/g, '');
                 if (!phone) continue;
                 const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
+                if (!knownContacts.has(jid)) {
+                    console.log(`[Reminder] Skipping ${c.name} (${phone}) — never messaged bot`);
+                    continue;
+                }
                 const msg = `🔔 *Payment Reminder*\n\nHi ${c.name}, you have an outstanding balance of *Rs. ${c.outstandingBalance}*.\nPaid: Rs. ${c.paidAmount} of Rs. ${c.totalBalance}\n\nPlease settle soon. Bank transfer or in-store. 🏦`;
                 try {
                     await sendWithTimeout(sock, jid, { text: msg });
@@ -168,6 +173,7 @@ async function connectToWhatsApp() {
             }
 
             // ============ DM ============
+            knownContacts.add(senderJid);
 
             // Owner commands
             if (isOwner(senderJid)) {
