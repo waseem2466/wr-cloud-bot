@@ -46,27 +46,52 @@ async function refreshAuth() {
         if (connection === 'open') {
             console.log(' Connected to WhatsApp successfully!');
 
-            // Wait a moment for creds to save, then zip
-            await new Promise(r => setTimeout(r, 2000));
+            // Wait a moment for creds to save
+            await new Promise(r => setTimeout(r, 3000));
+
+            // Verify creds are fully registered
+            const credsPath = path.join(AUTH_DIR, 'creds.json');
+            if (fs.existsSync(credsPath)) {
+                const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+                if (!creds.registered) {
+                    console.error('ERROR: Session registered=false. QR scan may be incomplete.');
+                    console.error('Please delete auth.bin and baileys_auth_info/, then run again.');
+                    process.exit(1);
+                }
+                console.log(` Registered as: ${creds.me?.name || 'unknown'} (${creds.me?.id || 'unknown'})`);
+            }
 
             console.log('Creating auth.bin from fresh session...');
             const zip = new AdmZip();
-            const files = fs.readdirSync(AUTH_DIR);
-            for (const file of files) {
-                const filePath = path.join(AUTH_DIR, file);
-                const stat = fs.statSync(filePath);
-                if (stat.isFile()) {
-                    zip.addLocalFile(filePath);
+            const entries = fs.readdirSync(AUTH_DIR, { withFileTypes: true });
+            let fileCount = 0;
+            for (const entry of entries) {
+                if (entry.isFile()) {
+                    const filePath = path.join(AUTH_DIR, entry.name);
+                    zip.addLocalFile(filePath, AUTH_DIR);
+                    fileCount++;
                 }
             }
             zip.writeZip(AUTH_ZIP);
-            console.log(` Created ${AUTH_ZIP} with ${files.length} files`);
+
+            // Verify ZIP has the correct folder structure
+            const verifyZip = new AdmZip(AUTH_ZIP);
+            const zipEntries = verifyZip.getEntries();
+            const hasPrefix = zipEntries.every(e => e.entryName.startsWith(AUTH_DIR + '/'));
+            console.log(` Created ${AUTH_ZIP} with ${fileCount} files`);
+            if (!hasPrefix) {
+                console.warn('WARNING: ZIP entries missing baileys_auth_info/ prefix — extraction will fail on server!');
+            } else {
+                console.log(' ZIP structure verified OK (entries have baileys_auth_info/ prefix)');
+            }
+
             console.log('\n Done! Now commit and push to GitHub.');
             console.log(' Run:');
+            console.log('   cd C:\\Users\\wasee\\OneDrive\\Desktop\\wr-pos');
             console.log('   git add wr-cloud-bot/auth.bin');
             console.log('   git commit -m "refresh WhatsApp auth session"');
             console.log('   git push');
-            console.log('\nThen redeploy on Koyeb.');
+            console.log('\nThen Koyeb will auto-redeploy from the new commit.');
             process.exit(0);
         }
         if (connection === 'close') {
