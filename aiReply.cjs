@@ -118,6 +118,42 @@ async function callLocalOllama(text, systemPrompt) {
     }
 }
 
+// ─── Groq Provider (free, fast, open-source models) ──────────────────────────
+
+async function callGroq(text, systemPrompt) {
+    const apiKey = (typeof process !== 'undefined' && process.env.GROQ_API_KEY) || '';
+    if (!apiKey) throw new Error('No Groq API key');
+
+    const model = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+    console.log(`[AI] Calling Groq (${model})...`);
+
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: text }
+            ],
+            temperature: 0.7,
+            max_tokens: 200
+        })
+    });
+
+    if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Groq failed (${res.status}): ${errText}`);
+    }
+    const data = await res.json();
+    const reply = data.choices?.[0]?.message?.content;
+    if (!reply) throw new Error('No response from Groq');
+    return reply;
+}
+
 // ─── Ollama Cloud Provider ────────────────────────────────────────────────────
 
 async function callOllamaCloud(text, systemPrompt) {
@@ -182,11 +218,11 @@ Contact: ${shop.phoneNumbers.join(', ')}.
 Reply politely, concisely, and in the same language the customer uses. Keep replies under 3 sentences.`;
 
     // Step 2: Build provider chain based on preferred mode
-    const allProviders = ['local-ollama', 'gemini', 'ollama-cloud'];
+    const allProviders = ['gemini', 'groq', 'ollama-cloud'];
     let chain = [];
 
     if (mode === 'auto') {
-        chain = ['local-ollama', 'gemini', 'ollama-cloud'];
+        chain = ['gemini', 'groq'];
     } else {
         chain = [mode];
         allProviders.forEach(p => {
@@ -207,6 +243,11 @@ Reply politely, concisely, and in the same language the customer uses. Keep repl
             if (provider === 'gemini') {
                 const res = await callGemini(text, currentSystemPrompt);
                 console.log(`[AI Engine] Gemini success.`);
+                return res;
+            }
+            if (provider === 'groq') {
+                const res = await callGroq(text, currentSystemPrompt);
+                console.log(`[AI Engine] Groq success.`);
                 return res;
             }
             if (provider === 'ollama-cloud') {
