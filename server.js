@@ -114,9 +114,17 @@ async function connectToWhatsApp() {
 
             // 4. Handle Customer AI Auto-Reply
             const intent = detectIntent(text);
-            const aiResponse = await aiReply(text, senderJid, intent);
+            let aiResponse = null;
+            try {
+                aiResponse = await aiReply(text, 'auto');
+            } catch (err) {
+                console.error('[AI] Reply generation failed:', err.message);
+            }
             if (aiResponse) {
+                console.log(`[AI] Sending reply to ${replyTo}: "${aiResponse}"`);
                 await sock.sendMessage(replyTo, { text: aiResponse });
+            } else {
+                console.warn('[AI] No reply generated for message:', text);
             }
         }
     });
