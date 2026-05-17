@@ -23,14 +23,31 @@ server.listen(PORT, () => {
     console.log(` Cloud Health Server running on port ${PORT}`);
 });
 
+const STOP_WORDS = new Set(['i','a','an','the','is','it','am','to','for','of','in','on','at','by','with','and','or','but','not','do','does','did','have','has','had','can','will','want','need','buy','get','some','please','me','my','you','your','how','much','what','which','where','who','are','this','that','there','here','all','any','each','every','just','now','also','very','too','was','were','been','being','would','could','should','may','might','shall','got','know','like','say','tell','ask','help','check','see','look','give','take','use','make','come','going','out','up','down','off','over','about','than','then','then','price','rate','cost','stock','available','hello','hi','hey','thanks','thank','bye']);
+
+function extractKeywords(text) {
+    const words = text.toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(w => w.length >= 3 && !STOP_WORDS.has(w));
+    return [...new Set(words)];
+}
+
 async function buildInventoryContext(text) {
     try {
-        const intent = detectIntent(text);
-        let query = text.replace(/(?:price|cost|rate|how much|do you have|stock|available|have you got|is there)\s*/gi, '').trim();
-        if (query.length < 2) return '';
-        const products = await searchInventory(query);
-        if (!products || products.length === 0) return '';
-        return products.map(p => `- ${p.name}: Rs. ${p.price} (Stock: ${p.stock})`).join('\n');
+        const keywords = extractKeywords(text);
+        if (keywords.length === 0) return '';
+        const results = new Map();
+        for (const word of keywords.slice(0, 5)) {
+            const products = await searchInventory(word);
+            for (const p of products) {
+                if (!results.has(p.name)) results.set(p.name, p);
+            }
+        }
+        if (results.size === 0) return '';
+        return [...results.values()].slice(0, 5)
+            .map(p => `- ${p.name}: Rs. ${p.price} (Stock: ${p.stock})`)
+            .join('\n');
     } catch { return ''; }
 }
 
