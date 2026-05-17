@@ -7,6 +7,13 @@ const http = require('http');
 
 dotenv.config();
 
+function sendWithTimeout(sock, jid, content, timeoutMs = 20000) {
+    return Promise.race([
+        sock.sendMessage(jid, content),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timed Out')), timeoutMs))
+    ]);
+}
+
 const { handleOwnerCommand, isOwner } = require('./inventoryManager.cjs');
 const { handleGroupMessage, isWatchedGroup, registerGroup } = require('./groupWatcher.cjs');
 const { aiReply } = require('./aiReply.cjs');
@@ -69,11 +76,11 @@ async function startPaymentReminders(sock) {
                 const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
                 const msg = `🔔 *Payment Reminder*\n\nHi ${c.name}, you have an outstanding balance of *Rs. ${c.outstandingBalance}*.\nPaid: Rs. ${c.paidAmount} of Rs. ${c.totalBalance}\n\nPlease settle soon. Bank transfer or in-store. 🏦`;
                 try {
-                    await sock.sendMessage(jid, { text: msg });
+                    await sendWithTimeout(sock, jid, { text: msg });
                     console.log(`[Reminder] Sent to ${c.name} (${phone})`);
                     await new Promise(r => setTimeout(r, 2000));
                 } catch (e) {
-                    console.error(`[Reminder] Failed for ${phone}:`, e.message);
+                    console.error(`[Reminder] Failed for ${phone}: ${e.message}`);
                 }
             }
         } catch (e) {
