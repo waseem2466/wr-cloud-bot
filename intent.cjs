@@ -32,8 +32,16 @@ function detectIntent(text) {
         return 'PRICE';
 
     // Product / item availability
-    if (/\b(product|item|sell|available|stock|carry|have)\b/.test(t))
+    if (/\b(product|item|sell|available|stock|carry|have|do you|got)\b/.test(t))
         return 'PRODUCTS';
+
+    // Browse category — "show kitchen items", "what phones", "list cosmetics"
+    if (/\b(show|list|browse|display|catalog|what.*(?:have|sell)|categories?|items? in)\b/i.test(t))
+        return 'BROWSE_CATEGORY';
+
+    // Place order — "I need 2 cement", "order 5 paint", "want 3 rice"
+    if (/\b(?:need|want|order|buy|get)\s+\d+/.test(t) || /\b(?:need|want|order|buy|get)\s+.*?\s+\d+/.test(t))
+        return 'ORDER';
 
     // Opening hours
     if (/\b(hour|time|open|close|timing|working|when)\b/.test(t))

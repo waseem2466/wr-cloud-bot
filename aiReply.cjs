@@ -201,7 +201,12 @@ async function aiReply(text, mode = 'auto', inventoryContext = '', financialCont
         return keywordReply;
     }
 
-    // Prepare System Prompt with optional live context
+    const customerNameMatch = text.match(/^\(Customer: (.+?)\) /);
+    const knownCustomer = customerNameMatch ? customerNameMatch[1] : '';
+    const cleanText = customerNameMatch ? text.replace(customerNameMatch[0], '') : text;
+
+    const customerLine = knownCustomer ? `\nThe customer's name is "${knownCustomer}". Address them by name when replying.` : '';
+
     const currentSystemPrompt = `You are a helpful and friendly customer service assistant for "${shop.shopName}" located at ${shop.address}.
     
 IMPORTANT SHOP FAQs (Prioritize these answers):
@@ -210,12 +215,16 @@ ${shop.faqs.map(f => `- Q: ${f.q} A: ${f.a}`).join('\n')}
 WHATSAPP GROUP MONITORING:
 - You monitor admin groups (like "Smile and Supplies") to automatically update your inventory from staff posts.
 - If customers ask to join the group, share this link: ${shop.whatsappGroupLink}
+- If asked about product categories, direct them: "Send 'Show [category]' to browse our catalog."
 
 ${inventoryContext ? `LIVE INVENTORY INFO:\n${inventoryContext}\nCRITICAL: You MUST tell the customer the exact price listed in the data. Never omit the price or say "check with us" if the price is available in the list above.` : ''}
 ${financialContext ? `CUSTOMER FINANCIAL STATUS:\n${financialContext}\nProvide a warm summary of their loan, paid amount, and current balance.` : (inventoryContext ? '' : `We sell: ${shop.products.join(', ')}.`)}
 Opening hours: ${shop.openingHours}.
 Contact: ${shop.phoneNumbers.join(', ')}.
-Reply politely, concisely, and in the same language the customer uses. Keep replies under 3 sentences.`;
+Reply politely, concisely, and in the same language the customer uses. Keep replies under 3 sentences.${customerLine}`;
+
+    // Replace text with cleaned version (without customer prefix)
+    text = cleanText;
 
     // Step 2: Build provider chain based on preferred mode
     const allProviders = ['gemini', 'groq', 'ollama-cloud'];

@@ -77,4 +77,75 @@ async function getCustomerBalance(phone) {
     }
 }
 
-module.exports = { searchInventory, getCustomerBalance };
+async function getProductsByCategory(category) {
+    if (!category || category.length < 2) return [];
+    const p = getPool();
+    try {
+        const res = await p.query(
+            `SELECT name, price, stock, category, description FROM "Product"
+             WHERE category ILIKE $1 ORDER BY name LIMIT 10`,
+            [`%${category}%`]
+        );
+        return res.rows;
+    } catch (err) {
+        console.error('[DB] Category search error:', err.message);
+        return [];
+    }
+}
+
+async function getAllCategories() {
+    const p = getPool();
+    try {
+        const res = await p.query(
+            `SELECT DISTINCT category FROM "Product" WHERE category IS NOT NULL ORDER BY category`
+        );
+        return res.rows.map(r => r.category);
+    } catch (err) {
+        console.error('[DB] Categories error:', err.message);
+        return [];
+    }
+}
+
+async function getCustomerByPhone(phone) {
+    if (!phone) return null;
+    const p = getPool();
+    try {
+        const cleanPhone = phone.replace(/[^0-9]/g, '').slice(-10);
+        const res = await p.query(
+            `SELECT id, name, phone, "totalBalance", "paidAmount", "outstandingBalance"
+             FROM "Customer" WHERE phone LIKE $1 LIMIT 1`,
+            [`%${cleanPhone}%`]
+        );
+        return res.rows.length > 0 ? res.rows[0] : null;
+    } catch (err) {
+        console.error('[DB] Customer lookup error:', err.message);
+        return null;
+    }
+}
+
+async function createOrder(customerName, customerPhone, items, paymentType = 'LOAN') {
+    const p = getPool();
+    const id = `ord_wa_${Date.now()}`;
+    const invoiceNumber = `WA${Date.now().toString(36).toUpperCase()}`;
+    const subtotal = items.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    try {
+        await p.query(
+            `INSERT INTO "Bill" (id, "invoiceNumber", date, "customerName", "customerId", items, subtotal, total, "paymentType", "createdAt", "updatedAt")
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            [id, invoiceNumber, new Date().toISOString(), customerName, '', JSON.stringify(items),
+             subtotal, subtotal, paymentType, new Date().toISOString(), new Date().toISOString()]
+        );
+        for (const item of items) {
+            await p.query(
+                `UPDATE "Product" SET stock = GREATEST(0, stock - $1), "updatedAt" = $2 WHERE name ILIKE $3`,
+                [item.quantity, new Date().toISOString(), item.name]
+            );
+        }
+        return { success: true, invoiceNumber, total: subtotal, id };
+    } catch (err) {
+        console.error('[DB] Order creation error:', err.message);
+        return { success: false, error: err.message };
+    }
+}
+
+module.exports = { searchInventory, getCustomerBalance, getProductsByCategory, getAllCategories, getCustomerByPhone, createOrder };

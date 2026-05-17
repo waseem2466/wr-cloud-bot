@@ -12,7 +12,7 @@ const { handleGroupMessage, isWatchedGroup, registerGroup } = require('./groupWa
 const { aiReply } = require('./aiReply.cjs');
 const { detectIntent } = require('./intent.cjs');
 const { handlePriceQuery, handleAvailabilityQuery, getProductDetails } = require('./productPriceHandler.cjs');
-const { searchInventory, getCustomerBalance } = require('./dbHelper.cjs');
+const { searchInventory, getCustomerBalance, getProductsByCategory, getAllCategories, getCustomerByPhone, createOrder } = require('./dbHelper.cjs');
 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -152,8 +152,61 @@ async function connectToWhatsApp() {
 
             // ============ SMART REPLY ENGINE ============
             const intent = detectIntent(text);
+            let customerName = '';
 
-            // 1. Price query — live DB lookup, instant reply
+            // 0. Auto-ID: look up customer by phone number
+            const phone = extractPhoneFromJid(senderJid);
+            const customer = phone ? await getCustomerByPhone(phone) : null;
+            if (customer) customerName = customer.name;
+
+            // 1. Browse category — "show kitchen items", "list cosmetics"
+            if (intent === 'BROWSE_CATEGORY') {
+                const cats = await getAllCategories();
+                const categoryMatch = text.match(/(?:show|list|browse|display|items? in|what)\s+(.+?)(?:\?|$)/i);
+                const searchCat = categoryMatch ? categoryMatch[1].trim() : '';
+                if (searchCat && searchCat.length > 1) {
+                    const products = await getProductsByCategory(searchCat);
+                    if (products.length > 0) {
+                        const reply = `*${searchCat.toUpperCase()}*\n\n` + products.map((p, i) =>
+                            `${i + 1}. ${p.name} — Rs. ${p.price} (Stock: ${p.stock})`
+                        ).join('\n');
+                        await sock.sendMessage(replyTo, { text: reply });
+                        continue;
+                    }
+                }
+                const catList = cats.join(', ');
+                await sock.sendMessage(replyTo, { text: `📂 *Categories:*\n${catList}\n\nSend *"Show [category]"* to browse.` });
+                continue;
+            }
+
+            // 2. Place order — "I need 2 cement and 5 paint"
+            if (intent === 'ORDER') {
+                const orderMatch = text.match(/(\d+)\s+(.+?)(?:\s+and\s+|,|\s*$)/gi);
+                if (orderMatch) {
+                    const items = [];
+                    for (const m of orderMatch) {
+                        const parts = m.match(/(\d+)\s+(.+?)(?:\s+and\s+|,|\s*$)/i);
+                        if (parts) {
+                            const qty = parseInt(parts[1]);
+                            const name = parts[2].trim();
+                            const product = await searchInventory(name);
+                            if (product.length > 0) {
+                                items.push({ name: product[0].name, quantity: qty, price: product[0].price });
+                            }
+                        }
+                    }
+                    if (items.length > 0) {
+                        const result = await createOrder(customerName || phone || 'Customer', phone || '', items);
+                        if (result.success) {
+                            const summary = items.map(i => `• ${i.name} x ${i.quantity} = Rs. ${i.price * i.quantity}`).join('\n');
+                            await sock.sendMessage(replyTo, { text: `✅ *Order Placed!*\nInvoice: #${result.invoiceNumber}\n\n${summary}\n\nTotal: Rs. ${result.total}\n\nReply "OK" to confirm or call us.` });
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // 3. Price / product query — live DB lookup
             if (intent === 'PRICE' || intent === 'PRODUCTS') {
                 const priceResult = await handlePriceQuery(text);
                 if (priceResult.handled && priceResult.reply) {
@@ -167,11 +220,12 @@ async function connectToWhatsApp() {
                 }
             }
 
-            // 2. Loan / balance query — live DB lookup
+            // 4. Loan / balance query
             let financialContext = '';
             if (intent === 'LOAN_INQUIRY' || intent === 'BALANCE_CHECK') {
-                const phone = extractPhoneFromJid(senderJid);
-                if (phone) {
+                if (customer) {
+                    financialContext = `Customer: ${customer.name}\nTotal: Rs. ${customer.totalBalance}\nPaid: Rs. ${customer.paidAmount}\nOutstanding: Rs. ${customer.outstandingBalance}`;
+                } else if (phone) {
                     const balance = await getCustomerBalance(phone);
                     if (balance) {
                         financialContext = `Customer: ${balance.name}\nTotal: Rs. ${balance.totalBalance}\nPaid: Rs. ${balance.paidAmount}\nOutstanding: Rs. ${balance.outstandingBalance}`;
@@ -179,16 +233,20 @@ async function connectToWhatsApp() {
                 }
             }
 
-            // 3. Build live inventory context from the message
+            // 5. Build live inventory context
             let inventoryContext = '';
             if (!financialContext) {
                 inventoryContext = await buildInventoryContext(text);
             }
 
-            // 4. AI reply with live context — Gemini first (skip local-ollama in cloud)
+            // 6. Personalized greeting for known customers
+            const personalizedGreeting = customerName ? `(Customer: ${customerName}) ` : '';
+
+            // 7. AI reply with live context
             let aiResponse = null;
             try {
-                aiResponse = await aiReply(text, 'auto', inventoryContext, financialContext);
+                const aiText = personalizedGreeting + text;
+                aiResponse = await aiReply(aiText, 'auto', inventoryContext, financialContext);
             } catch (err) {
                 console.error('[AI] Reply failed:', err.message);
             }
