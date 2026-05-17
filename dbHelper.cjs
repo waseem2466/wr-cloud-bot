@@ -32,10 +32,6 @@ async function searchInventory(query) {
             `SELECT name, price, stock, category, 'inventory' as source
              FROM "Product"
              WHERE name ILIKE $1 OR sku ILIKE $1
-             UNION ALL
-             SELECT name, price, stock, category, 'group' as source
-             FROM "GroupProduct"
-             WHERE name ILIKE $1
              LIMIT 5`,
             [`%${query}%`]
         );
