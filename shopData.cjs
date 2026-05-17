@@ -34,12 +34,12 @@ Visit us or call 0779336848 for prices!`,
         goodbye: "Thank you for contacting WR smile and supplies! 🌟 Have a wonderful day. Come visit us soon! 🛍️",
         policy: "⚠️ *Return Policy*: Multi-item returns are accepted within 3 days of purchase. Please keep your receipt! 🧾"
     },
-    whatsappGroupLink: "https://chat.whatsapp.com/L4jZ89K3L9B8v8u8u8u8u8", // Update with your real link!
+    whatsappGroupLink: "https://chat.whatsapp.com/K7ALigMk9ad4SBlcRUqoxX?mode=wwt",
     faqs: [
         { q: "Do you offer delivery?", a: "Yes! We offer island-wide delivery via courier or post." },
         { q: "Do you have Cash on Delivery (COD)?", a: "No, we do not offer Cash on Delivery. Payment must be made via Bank Transfer before shipping." },
         { q: "What payment methods do you accept?", a: "We accept Cash (in-store) and Bank Transfer for deliveries. Please send your deposit slip to our WhatsApp." },
         { q: "Where is the shop located?", a: "We are located at Mullipothana 96, Kandy Road, Trincomalee District." },
-        { q: "How can I join your product update group?", a: "You can join our official WhatsApp group here: https://chat.whatsapp.com/L4jZ89K3L9B8v8u8u8u8u8" }
+        { q: "How can I join your product update group?", a: "You can join our official WhatsApp group here: https://chat.whatsapp.com/K7ALigMk9ad4SBlcRUqoxX?mode=wwt" }
     ]
 };
