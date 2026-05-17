@@ -122,7 +122,11 @@ async function connectToWhatsApp() {
             // ============ GROUP ============
             if (isGroup) {
                 if (isWatchedGroup(msg.key.remoteJid, msg.pushName)) {
-                    await handleGroupMessage(msg, sock);
+                    const isGroupSenderAdmin = isOwner(senderJid) || ['0779336848', '0750204698'].some(n => senderJid?.includes(n));
+                    if (isGroupSenderAdmin) {
+                        await handleGroupMessage(msg, sock, true);
+                        console.log(`[Group] Admin product saved to main inventory from: ${senderJid}`);
+                    }
                 }
                 continue;
             }

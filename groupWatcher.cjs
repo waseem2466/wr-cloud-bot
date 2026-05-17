@@ -286,7 +286,7 @@ Rules:
  * @param {object} sock - Baileys socket (for downloading media)
  * @returns {{ handled: boolean, reply?: string, product?: object }}
  */
-async function handleGroupMessage(msg, sock) {
+async function handleGroupMessage(msg, sock, saveToMain = false) {
     try {
         const hasImage = !!msg?.message?.imageMessage;
         const caption = msg?.message?.imageMessage?.caption || '';
@@ -316,9 +316,12 @@ async function handleGroupMessage(msg, sock) {
             return { handled: false };
         }
 
-        // SAFELY add to GROUP inventory (not main inventory)
-        console.log(`[GroupWatcher] 📦 Logging group item: ${productData.name}`);
-        const result = await safeAddGroupProduct({
+        // Choose target table based on who sent it
+        const saveFn = saveToMain ? safeAddProduct : safeAddGroupProduct;
+        const tableName = saveToMain ? 'Product' : 'GroupProduct';
+        console.log(`[GroupWatcher] ${saveToMain ? '📦 Adding to MAIN inventory' : '📦 Logging group item'}: ${productData.name}`);
+
+        const result = await saveFn({
             name: productData.name,
             price: productData.price || 0,
             cost: productData.cost || 0,
@@ -329,8 +332,8 @@ async function handleGroupMessage(msg, sock) {
 
         if (result.success) {
             const statusEmoji = result.isUpdate ? '🔄' : '📝';
-            const reply = `${statusEmoji} *Group Item Logged!*\n\n${result.message}\n_(This item is not in main inventory)_`;
-            console.log(`[GroupWatcher] ✅ Group product logged: ${productData.name}`);
+            const reply = `${statusEmoji} *${saveToMain ? 'Product' : 'Group Item'} ${result.isUpdate ? 'Updated' : 'Added'}!*\n\n${result.message}`;
+            console.log(`[GroupWatcher] ✅ ${tableName}: ${productData.name}`);
             return { handled: true, reply, product: productData };
         } else {
             console.error(`[GroupWatcher] ❌ Failed to save: ${result.error}`);
