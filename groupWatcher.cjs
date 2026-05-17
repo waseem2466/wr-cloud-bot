@@ -123,7 +123,7 @@ async function extractProductFromImage(imageBase64, captionText = '') {
         return null;
     }
 
-    const model = process.env.VITE_GEMINI_MODEL || 'gemini-2.0-flash-lite';
+    const model = process.env.VITE_GEMINI_VISION_MODEL || 'gemini-2.0-flash';
 
     const prompt = `You are reading a product photo posted in a shop's WhatsApp group.
 
