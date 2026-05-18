@@ -32,6 +32,10 @@ async function searchInventory(query) {
             `SELECT name, price, stock, category, 'inventory' as source, COALESCE(image_url, '') as image_url
              FROM "Product"
              WHERE name ILIKE $1 OR sku ILIKE $1
+             UNION ALL
+             SELECT name, price, stock, category, 'group' as source, '' as image_url
+             FROM "GroupProduct"
+             WHERE name ILIKE $1
              LIMIT 5`,
             [`%${query}%`]
         );

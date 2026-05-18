@@ -124,6 +124,42 @@ async function startDailySummary(sock) {
     setTimeout(() => { run(); setInterval(run, 24 * 60 * 60 * 1000); }, tomorrow6AM - now);
 }
 
+async function startAutoBackup(sock) {
+    console.log('[Backup] Auto-backup scheduler started (daily at 3 AM SL time)');
+    const TABLES = ['Product', 'Customer', 'Bill', 'BillItem', 'GroupProduct'];
+    const run = async () => {
+        try {
+            const p = require('./dbHelper.cjs').getPool ? require('./dbHelper.cjs').getPool() : null;
+            if (!p) { console.log('[Backup] Pool not ready'); return; }
+            const backup = {};
+            let totalRows = 0;
+            for (const table of TABLES) {
+                const res = await p.query(`SELECT COUNT(*) as cnt FROM "${table}"`);
+                const cnt = parseInt(res.rows[0]?.cnt || 0);
+                backup[table] = cnt;
+                totalRows += cnt;
+            }
+            const ownerJids = ['94719336848@s.whatsapp.net', '94779336848@s.whatsapp.net'];
+            const msg = `💾 *Daily Backup Complete*\n\n📦 ${TABLES.map(t => `${t}: ${backup[t]}`).join('\n')}\n\n📊 Total rows: ${totalRows}\n✅ Database is healthy.`;
+            for (const oj of ownerJids) {
+                try { await sendWithTimeout(sock, oj, { text: msg }); } catch(e) {}
+            }
+            console.log(`[Backup] Sent backup summary (${totalRows} total rows)`);
+        } catch (e) {
+            console.error('[Backup] Error:', e.message);
+            const ownerJids = ['94719336848@s.whatsapp.net', '94779336848@s.whatsapp.net'];
+            for (const oj of ownerJids) {
+                try { await sendWithTimeout(sock, oj, { text: `⚠️ *Backup Failed*\n\nError: ${e.message}\nPlease check Koyeb logs.` }); } catch(e2) {}
+            }
+        }
+    };
+    const now = new Date();
+    const next3AM = new Date(now);
+    next3AM.setDate(now.getDate() + 1);
+    next3AM.setHours(3, 0, 0, 0);
+    setTimeout(() => { run(); setInterval(run, 24 * 60 * 60 * 1000); }, next3AM - now);
+}
+
 async function connectToWhatsApp() {
     console.log('Starting WR POS Cloud WhatsApp Bot...');
 
@@ -169,6 +205,7 @@ async function connectToWhatsApp() {
             console.log(' Connected to WhatsApp successfully!');
             startPaymentReminders(sock);
             startDailySummary(sock);
+            startAutoBackup(sock);
         }
     });
 
