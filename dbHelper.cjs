@@ -29,7 +29,7 @@ async function searchInventory(query) {
     const p = getPool();
     try {
         const res = await p.query(
-            `SELECT name, price, stock, category, 'inventory' as source, COALESCE(image_url, '') as image_url
+            `SELECT name, price, stock, category, 'inventory' as source, '' as image_url
              FROM "Product"
              WHERE name ILIKE $1 OR sku ILIKE $1
              UNION ALL

@@ -217,6 +217,10 @@ async function connectToWhatsApp() {
 
             const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || '';
 
+            const isGroup = msg.key.remoteJid?.endsWith('@g.us');
+            const senderJid = isGroup ? (msg.key.participant || msg.key.remoteJid) : msg.key.remoteJid;
+            const replyTo = msg.key.remoteJid;
+
             if (!text) {
                 if (msg.message?.audioMessage && !isGroup) {
                     knownContacts.add(senderJid);
@@ -228,10 +232,6 @@ async function connectToWhatsApp() {
                 }
                 continue;
             }
-
-            const isGroup = msg.key.remoteJid?.endsWith('@g.us');
-            const senderJid = isGroup ? (msg.key.participant || msg.key.remoteJid) : msg.key.remoteJid;
-            const replyTo = msg.key.remoteJid;
 
             if (senderJid === 'status@broadcast' || replyTo === 'status@broadcast') continue;
 
