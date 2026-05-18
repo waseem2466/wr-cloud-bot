@@ -7,6 +7,7 @@
 require('dotenv').config(); // Load .env keys (works both standalone and in Electron)
 const shop = require('./shopData.cjs');
 const fetch = require('node-fetch');
+const brain = require('./knowledgeBrain.cjs');
 
 // ─── Keyword Matching (free, instant) ────────────────────────────────────────
 
@@ -251,6 +252,8 @@ async function aiReply(text, mode = 'auto', inventoryContext = '', financialCont
 
     const customerLine = knownCustomer ? `\nThe customer's name is "${knownCustomer}". Address them by name when replying.` : '';
 
+    const brainContext = brain.getContextString(text);
+
     const currentSystemPrompt = `You are a helpful and friendly customer service assistant for "${shop.shopName}" located at ${shop.address}.
     
 IMPORTANT SHOP FAQs (Prioritize these answers):
@@ -263,6 +266,7 @@ WHATSAPP GROUP MONITORING:
 
 ${inventoryContext ? `LIVE INVENTORY INFO:\n${inventoryContext}\nCRITICAL: You MUST tell the customer the exact price listed in the data. Never omit the price or say "check with us" if the price is available in the list above.` : ''}
 ${financialContext ? `CUSTOMER FINANCIAL STATUS:\n${financialContext}\nProvide a warm summary of their loan, paid amount, and current balance.` : (inventoryContext ? '' : `We sell: ${shop.products.join(', ')}.`)}
+${brainContext}
 Opening hours: ${shop.openingHours}.
 Contact: ${shop.phoneNumbers.join(', ')}.
 CRITICAL LANGUAGE RULE: Reply in the SAME LANGUAGE the customer wrote in — Sinhala (සිංහල), Tamil (தமிழ்), or English. Detect the language from their message and reply in it. Never mix languages.
