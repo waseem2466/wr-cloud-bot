@@ -242,6 +242,12 @@ async function connectToWhatsApp() {
                         if (result.success) {
                             const summary = items.map(i => `• ${i.name} x ${i.quantity} = Rs. ${i.price * i.quantity}`).join('\n');
                             await sock.sendMessage(replyTo, { text: `✅ *Order Placed!*\nInvoice: #${result.invoiceNumber}\n\n${summary}\n\nTotal: Rs. ${result.total}\n\nReply "OK" to confirm or call us.` });
+                            const ownerPhones = ['94719336848', '94779336848'];
+                            for (const op of ownerPhones) {
+                                const ownerJid = `${op}@s.whatsapp.net`;
+                                const ownerMsg = `📦 *New WhatsApp Order!*\n\nFrom: ${customerName || phone}\nPhone: ${phone}\nInvoice: #${result.invoiceNumber}\n\n${summary}\n\n*Total: Rs. ${result.total}*`;
+                                try { await sock.sendMessage(ownerJid, { text: ownerMsg }); } catch(e) {}
+                            }
                             continue;
                         }
                     }
