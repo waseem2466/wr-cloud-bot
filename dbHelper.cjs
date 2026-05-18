@@ -29,7 +29,7 @@ async function searchInventory(query) {
     const p = getPool();
     try {
         const res = await p.query(
-            `SELECT name, price, stock, category, 'inventory' as source
+            `SELECT name, price, stock, category, 'inventory' as source, COALESCE(image_url, '') as image_url
              FROM "Product"
              WHERE name ILIKE $1 OR sku ILIKE $1
              LIMIT 5`,
@@ -40,7 +40,8 @@ async function searchInventory(query) {
             price: row.price,
             stock: row.stock,
             category: row.category || 'General',
-            source: row.source
+            source: row.source,
+            imageUrl: row.image_url || ''
         }));
     } catch (err) {
         console.error('[DB Helper] Search error:', err.message);
@@ -78,7 +79,7 @@ async function getProductsByCategory(category) {
     const p = getPool();
     try {
         const res = await p.query(
-            `SELECT name, price, stock, category, description FROM "Product"
+            `SELECT name, price, stock, category, description, COALESCE(image_url, '') as image_url FROM "Product"
              WHERE category ILIKE $1 ORDER BY name LIMIT 10`,
             [`%${category}%`]
         );

@@ -96,6 +96,34 @@ async function startPaymentReminders(sock) {
     setInterval(run, REMINDER_INTERVAL);
 }
 
+async function startDailySummary(sock) {
+    console.log('[Summary] Daily summary scheduler started (6 AM SL time)');
+    const run = async () => {
+        try {
+            const p = require('./dbHelper.cjs').getPool ? require('./dbHelper.cjs').getPool() : null;
+            if (!p) { console.log('[Summary] Pool not ready'); return; }
+            const twentyFourH = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+            const bills = await p.query(`SELECT COUNT(*) as cnt, COALESCE(SUM(total), 0) as rev FROM "Bill" WHERE created_at >= $1`, [twentyFourH]);
+            const newCustomers = await p.query(`SELECT COUNT(*) as cnt FROM "Customer" WHERE created_at >= $1`, [twentyFourH]);
+            const orderCount = bills.rows[0]?.cnt || '0';
+            const revenue = Number(bills.rows[0]?.rev || 0);
+            const newCust = newCustomers.rows[0]?.cnt || '0';
+            const ownerJids = ['94719336848@s.whatsapp.net', '94779336848@s.whatsapp.net'];
+            const summary = `📊 *Daily Summary (Last 24h)*\n\n🧾 Orders: ${orderCount}\n💰 Revenue: Rs. ${revenue}\n👥 New Customers: ${newCust}\n\nBot status: ${knownContacts.size} active WhatsApp contacts`;
+            for (const oj of ownerJids) {
+                try { await sendWithTimeout(sock, oj, { text: summary }); } catch(e) {}
+            }
+        } catch (e) {
+            console.error('[Summary] Error:', e.message);
+        }
+    };
+    const now = new Date();
+    const tomorrow6AM = new Date(now);
+    tomorrow6AM.setDate(now.getDate() + 1);
+    tomorrow6AM.setHours(6, 0, 0, 0);
+    setTimeout(() => { run(); setInterval(run, 24 * 60 * 60 * 1000); }, tomorrow6AM - now);
+}
+
 async function connectToWhatsApp() {
     console.log('Starting WR POS Cloud WhatsApp Bot...');
 
@@ -140,6 +168,7 @@ async function connectToWhatsApp() {
         } else if (connection === 'open') {
             console.log(' Connected to WhatsApp successfully!');
             startPaymentReminders(sock);
+            startDailySummary(sock);
         }
     });
 
@@ -150,7 +179,18 @@ async function connectToWhatsApp() {
             if (msg.key.fromMe) continue;
 
             const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || '';
-            if (!text) continue;
+
+            if (!text) {
+                if (msg.message?.audioMessage && !isGroup) {
+                    knownContacts.add(senderJid);
+                    if (isOwner(senderJid)) continue;
+                    await sock.sendMessage(replyTo, { text: `🎤 I received your voice message! Please type your message so I can help you better. You can also send us a photo of what you need.` }, { quoted: msg });
+                }
+                if (msg.message?.stickerMessage || msg.message?.videoMessage || msg.message?.documentMessage) {
+                    if (!isGroup) console.log(`[Message] Non-text media from ${senderJid} (skipped)`);
+                }
+                continue;
+            }
 
             const isGroup = msg.key.remoteJid?.endsWith('@g.us');
             const senderJid = isGroup ? (msg.key.participant || msg.key.remoteJid) : msg.key.remoteJid;
@@ -212,7 +252,12 @@ async function connectToWhatsApp() {
                         const reply = `*${searchCat.toUpperCase()}*\n\n` + products.map((p, i) =>
                             `${i + 1}. ${p.name} — Rs. ${p.price} (Stock: ${p.stock})`
                         ).join('\n');
-                        await sock.sendMessage(replyTo, { text: reply });
+                        const firstWithImage = products.find(p => p.image_url && p.image_url.startsWith('http'));
+                        if (firstWithImage) {
+                            await sock.sendMessage(replyTo, { image: { url: firstWithImage.image_url }, caption: reply });
+                        } else {
+                            await sock.sendMessage(replyTo, { text: reply });
+                        }
                         continue;
                     }
                 }
