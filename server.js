@@ -7,6 +7,28 @@ const http = require('http');
 
 dotenv.config();
 
+async function transcribeAudio(buffer) {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) return null;
+
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('file', buffer, 'audio.ogg');
+    form.append('model', 'whisper-large-v3');
+    form.append('language', 'en');
+
+    try {
+        const fetch = require('node-fetch');
+        const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${apiKey}`, ...form.getHeaders() },
+            body: form
+        });
+        const data = await res.json();
+        return data.text || null;
+    } catch { return null; }
+}
+
 function sendWithTimeout(sock, jid, content, timeoutMs = 20000) {
     return Promise.race([
         sock.sendMessage(jid, content),
@@ -224,14 +246,42 @@ async function connectToWhatsApp() {
             if (!text) {
                 if (msg.message?.audioMessage && !isGroup) {
                     knownContacts.add(senderJid);
-                    if (isOwner(senderJid)) continue;
-                    await sock.sendMessage(replyTo, { text: `🎤 I received your voice message! Please type your message so I can help you better. You can also send us a photo of what you need.` }, { quoted: msg });
+                    try {
+                        const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+                        const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                        const transcript = await transcribeAudio(buffer);
+                        if (transcript) {
+                            console.log(`[Voice] Transcribed: "${transcript}" from ${senderJid}`);
+                            // Fall through to normal processing with transcribed text
+                            text = transcript;
+                        } else {
+                            await sock.sendMessage(replyTo, { text: `🎤 I couldn't understand that. Please type or send a photo.` }, { quoted: msg });
+                            continue;
+                        }
+                    } catch(e) { 
+                        await sock.sendMessage(replyTo, { text: `🎤 Voice processing failed. Please type your message.` }, { quoted: msg });
+                        continue; 
+                    }
+                } else if (msg.message?.documentMessage && !isGroup) {
+                    knownContacts.add(senderJid);
+                    if (isOwner(senderJid)) {
+                        try {
+                            const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+                            const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                            const fileName = msg.message.documentMessage.fileName;
+                            const content = buffer.toString('utf-8');
+                            const { saveToDb } = require('./knowledgeBrain.cjs');
+                            const result = await saveToDb(fileName, content, 'Uploaded');
+                            await sock.sendMessage(replyTo, { text: result.success ? `🧠 *Knowledge Saved!* I learned from "${fileName}".` : `⚠️ Failed: ${result.error}` });
+                        } catch(e) { await sock.sendMessage(replyTo, { text: `⚠️ Could not read document.` }); }
+                    }
+                    continue;
+                } else if (msg.message?.stickerMessage || msg.message?.videoMessage) {
+                    continue;
                 }
-                if (msg.message?.stickerMessage || msg.message?.videoMessage || msg.message?.documentMessage) {
-                    if (!isGroup) console.log(`[Message] Non-text media from ${senderJid} (skipped)`);
-                }
-                continue;
             }
+
+            if (senderJid === 'status@broadcast' || replyTo === 'status@broadcast') continue;
 
             if (senderJid === 'status@broadcast' || replyTo === 'status@broadcast') continue;
 

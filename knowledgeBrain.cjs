@@ -1,13 +1,15 @@
 const fs = require('fs');
 const path = require('path');
+const { getPool } = require('./dbHelper.cjs');
 
 const KNOWLEDGE_DIR = path.join(__dirname, 'knowledge');
 
 // Cache for loaded knowledge
 let knowledgeCache = [];
+let dbCache = [];
 let lastLoadTime = 0;
 
-function loadKnowledge() {
+function loadLocalKnowledge() {
     if (!fs.existsSync(KNOWLEDGE_DIR)) {
         fs.mkdirSync(KNOWLEDGE_DIR, { recursive: true });
         return [];
@@ -15,13 +17,11 @@ function loadKnowledge() {
 
     const files = fs.readdirSync(KNOWLEDGE_DIR).filter(f => /\.(md|txt|json)$/i.test(f));
     knowledgeCache = [];
-    lastLoadTime = Date.now();
-
+    
     for (const file of files) {
         try {
             const content = fs.readFileSync(path.join(KNOWLEDGE_DIR, file), 'utf-8');
             knowledgeCache.push({ file, content, lines: content.split('\n').length });
-            console.log(`[Brain] Loaded: ${file} (${content.length} chars)`);
         } catch (err) {
             console.error(`[Brain] Failed to load ${file}:`, err.message);
         }
@@ -29,21 +29,39 @@ function loadKnowledge() {
     return knowledgeCache;
 }
 
-function searchKnowledge(query, maxResults = 3) {
+async function loadDbKnowledge() {
+    const p = getPool();
+    if (!p) return [];
+    try {
+        const res = await p.query(`SELECT title, content, category FROM "Knowledge" ORDER BY updated_at DESC`);
+        dbCache = res.rows.map(r => ({ source: `DB:${r.title} (${r.category})`, content: r.content }));
+        console.log(`[Brain] Loaded ${dbCache.length} records from DB`);
+        return dbCache;
+    } catch (err) {
+        console.error('[Brain] DB load failed:', err.message);
+        return [];
+    }
+}
+
+function loadKnowledge() {
+    loadLocalKnowledge();
+    loadDbKnowledge();
+    lastLoadTime = Date.now();
+}
+
+async function searchKnowledge(query, maxResults = 3) {
     if (!query || query.length < 3) return null;
     
-    // Reload if files are newer than cache
-    if (fs.existsSync(KNOWLEDGE_DIR)) {
-        const mtime = Math.max(...fs.readdirSync(KNOWLEDGE_DIR).map(f => {
-            try { return fs.statSync(path.join(KNOWLEDGE_DIR, f)).mtimeMs; } catch { return 0; }
-        }));
-        if (mtime > lastLoadTime) loadKnowledge();
-    }
-
+    await loadDbKnowledge(); // Always check DB for latest updates
     const q = query.toLowerCase();
     const results = [];
 
-    for (const doc of knowledgeCache) {
+    const allDocs = [
+        ...knowledgeCache.map(d => ({ source: d.file, content: d.content })),
+        ...dbCache
+    ];
+
+    for (const doc of allDocs) {
         const lines = doc.content.split('\n');
         const relevantLines = [];
         for (const line of lines) {
@@ -53,8 +71,8 @@ function searchKnowledge(query, maxResults = 3) {
         }
         if (relevantLines.length > 0) {
             results.push({
-                source: doc.file,
-                snippets: relevantLines.slice(0, 3), // Top 3 snippets
+                source: doc.source,
+                snippets: relevantLines.slice(0, 3),
                 relevance: relevantLines.length
             });
         }
@@ -63,8 +81,8 @@ function searchKnowledge(query, maxResults = 3) {
     return results.sort((a, b) => b.relevance - a.relevance).slice(0, maxResults);
 }
 
-function getContextString(query) {
-    const results = searchKnowledge(query);
+async function getContextString(query) {
+    const results = await searchKnowledge(query);
     if (!results || results.length === 0) return '';
 
     let context = `## INTERNAL KNOWLEDGE BASE:\n`;
@@ -74,7 +92,21 @@ function getContextString(query) {
     return context;
 }
 
+async function saveToDb(title, content, category = 'General') {
+    const p = getPool();
+    if (!p) return { success: false, error: 'DB not ready' };
+    const id = `know_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    try {
+        await p.query(`INSERT INTO "Knowledge" (id, title, content, category, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW())`, [id, title, content, category]);
+        console.log(`[Brain] Saved new knowledge to DB: ${title}`);
+        loadDbKnowledge();
+        return { success: true, id };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
 // Initial load
 loadKnowledge();
 
-module.exports = { searchKnowledge, getContextString, loadKnowledge };
+module.exports = { searchKnowledge, getContextString, saveToDb, loadKnowledge };
