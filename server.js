@@ -197,10 +197,10 @@ async function connectToWhatsApp() {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const isConflict = statusCode === 440;
             const isUnauthorized = statusCode === 401;
-            const shouldReconnect = !isConflict && !isUnauthorized && statusCode !== DisconnectReason.loggedOut;
-            if (isConflict) console.error('[WhatsApp] Connection conflict.');
+            const shouldReconnect = !isUnauthorized && statusCode !== DisconnectReason.loggedOut;
+            if (isConflict) console.warn('[WhatsApp] Conflict — another device connected, retrying in 10s...');
             if (isUnauthorized) console.error('[WhatsApp] Unauthorized (401).');
-            if (shouldReconnect) setTimeout(connectToWhatsApp, 3000);
+            if (shouldReconnect) setTimeout(connectToWhatsApp, isConflict ? 10000 : 3000);
         } else if (connection === 'open') {
             console.log(' Connected to WhatsApp successfully!');
             startPaymentReminders(sock);
