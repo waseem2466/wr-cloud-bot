@@ -4,8 +4,48 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const dotenv = require('dotenv');
 const http = require('http');
+const path = require('path');
 
 dotenv.config();
+
+const AUTH_DIR = process.env.AUTH_DIR || path.join(process.cwd(), 'baileys_auth_info');
+const AUTH_ZIP = process.env.AUTH_ZIP || path.join(process.cwd(), 'auth.bin');
+const DEFAULT_AUTH_FOLDER = 'baileys_auth_info';
+const SEND_API_SECRET = process.env.SEND_API_SECRET || '';
+let activeSock = null;
+
+function restoreAuthFromZip() {
+    if (fs.existsSync(path.join(AUTH_DIR, 'creds.json'))) return;
+    if (!fs.existsSync(AUTH_ZIP)) return;
+
+    console.log(` Extracting ${AUTH_ZIP} to restore WhatsApp session...`);
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip(AUTH_ZIP);
+    const authParent = path.dirname(AUTH_DIR);
+    const authBase = path.basename(AUTH_DIR);
+    fs.mkdirSync(authParent, { recursive: true });
+
+    zip.extractAllTo(authParent, true);
+
+    const extractedDefaultDir = path.join(authParent, DEFAULT_AUTH_FOLDER);
+    if (authBase !== DEFAULT_AUTH_FOLDER && fs.existsSync(extractedDefaultDir) && !fs.existsSync(AUTH_DIR)) {
+        fs.renameSync(extractedDefaultDir, AUTH_DIR);
+    }
+
+    console.log(` Auth session restored at ${AUTH_DIR}!`);
+}
+
+function hasUsableMessageContent(msg) {
+    return !!(
+        msg.message?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        msg.message?.imageMessage?.caption ||
+        msg.message?.audioMessage ||
+        msg.message?.documentMessage ||
+        msg.message?.stickerMessage ||
+        msg.message?.videoMessage
+    );
+}
 
 async function transcribeAudio(buffer) {
     const apiKey = process.env.GROQ_API_KEY;
@@ -43,7 +83,62 @@ const { detectIntent } = require('./intent.cjs');
 const { handlePriceQuery, handleAvailabilityQuery, getProductDetails } = require('./productPriceHandler.cjs');
 const { searchInventory, getCustomerBalance, getProductsByCategory, getAllCategories, getCustomerByPhone, createOrder, getOrdersByPhone, getOverdueCustomers } = require('./dbHelper.cjs');
 
-const server = http.createServer((req, res) => {
+function readJsonBody(req) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 1024 * 1024) {
+                reject(new Error('Request body too large'));
+                req.destroy();
+            }
+        });
+        req.on('end', () => {
+            try {
+                resolve(body ? JSON.parse(body) : {});
+            } catch {
+                reject(new Error('Invalid JSON body'));
+            }
+        });
+        req.on('error', reject);
+    });
+}
+
+function sendJson(res, status, payload) {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(payload));
+}
+
+const server = http.createServer(async (req, res) => {
+    if (req.method === 'POST' && req.url === '/send') {
+        try {
+            if (!SEND_API_SECRET) return sendJson(res, 503, { success: false, error: 'SEND_API_SECRET is not configured' });
+            const auth = req.headers.authorization || '';
+            if (auth !== `Bearer ${SEND_API_SECRET}`) return sendJson(res, 401, { success: false, error: 'Unauthorized' });
+            if (!activeSock) return sendJson(res, 503, { success: false, error: 'WhatsApp is not connected yet' });
+
+            const payload = await readJsonBody(req);
+            const to = String(payload.to || '').replace(/[^0-9]/g, '');
+            const message = String(payload.message || '');
+            if (!to || !message) return sendJson(res, 400, { success: false, error: 'to and message are required' });
+
+            const jid = `${to}@s.whatsapp.net`;
+            const content = payload.documentUrl
+                ? {
+                    document: { url: payload.documentUrl },
+                    mimetype: 'application/pdf',
+                    fileName: payload.documentName || 'invoice.pdf',
+                    caption: message
+                }
+                : { text: message };
+            const result = await sendWithTimeout(activeSock, jid, content);
+            return sendJson(res, 200, { success: true, id: result?.key?.id || null });
+        } catch (error) {
+            console.error('[Send API] Error:', error.message);
+            return sendJson(res, 500, { success: false, error: error.message });
+        }
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('WR POS Cloud Bot is running!');
 });
@@ -184,16 +279,11 @@ async function startAutoBackup(sock) {
 
 async function connectToWhatsApp() {
     console.log('Starting WR POS Cloud WhatsApp Bot...');
+    console.log(`[WhatsApp] Auth directory: ${AUTH_DIR}`);
 
-    if (!fs.existsSync('baileys_auth_info') && fs.existsSync('auth.bin')) {
-        console.log(' Extracting auth.bin to restore WhatsApp session...');
-        const AdmZip = require('adm-zip');
-        const zip = new AdmZip('auth.bin');
-        zip.extractAllTo('.', true);
-        console.log(' Auth session restored!');
-    }
+    restoreAuthFromZip();
 
-    const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info');
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     let { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -225,6 +315,7 @@ async function connectToWhatsApp() {
             if (shouldReconnect) setTimeout(connectToWhatsApp, isConflict ? 10000 : 3000);
         } else if (connection === 'open') {
             console.log(' Connected to WhatsApp successfully!');
+            activeSock = sock;
             startPaymentReminders(sock);
             startDailySummary(sock);
             startAutoBackup(sock);
@@ -236,8 +327,12 @@ async function connectToWhatsApp() {
 
         for (const msg of messages) {
             if (msg.key.fromMe) continue;
+            if (!msg.message || !hasUsableMessageContent(msg)) {
+                console.warn(`[WhatsApp] Ignoring empty/undecrypted message from ${msg.key.remoteJid || 'unknown'}. If this repeats, refresh the linked-device auth session.`);
+                continue;
+            }
 
-            const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || '';
+            let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || '';
 
             const isGroup = msg.key.remoteJid?.endsWith('@g.us');
             const senderJid = isGroup ? (msg.key.participant || msg.key.remoteJid) : msg.key.remoteJid;

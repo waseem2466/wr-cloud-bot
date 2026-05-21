@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { getPool } = require('./dbHelper.cjs');
+const dbHelper = require('./dbHelper.cjs');
 
 const KNOWLEDGE_DIR = path.join(__dirname, 'knowledge');
 
@@ -30,7 +30,7 @@ function loadLocalKnowledge() {
 }
 
 async function loadDbKnowledge() {
-    const p = getPool();
+    const p = typeof dbHelper.getPool === 'function' ? dbHelper.getPool() : null;
     if (!p) return [];
     try {
         const res = await p.query(`SELECT title, content, category FROM "Knowledge" ORDER BY updated_at DESC`);
@@ -93,7 +93,7 @@ async function getContextString(query) {
 }
 
 async function saveToDb(title, content, category = 'General') {
-    const p = getPool();
+    const p = typeof dbHelper.getPool === 'function' ? dbHelper.getPool() : null;
     if (!p) return { success: false, error: 'DB not ready' };
     const id = `know_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     try {

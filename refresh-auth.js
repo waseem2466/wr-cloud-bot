@@ -5,8 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
 
-const AUTH_DIR = 'baileys_auth_info';
-const AUTH_ZIP = 'auth.bin';
+const AUTH_DIR = process.env.AUTH_DIR || 'baileys_auth_info';
+const AUTH_ZIP = process.env.AUTH_ZIP || 'auth.bin';
 
 async function refreshAuth() {
     // Remove old auth state so we start fresh
@@ -68,7 +68,7 @@ async function refreshAuth() {
             for (const entry of entries) {
                 if (entry.isFile()) {
                     const filePath = path.join(AUTH_DIR, entry.name);
-                    zip.addLocalFile(filePath, AUTH_DIR);
+                    zip.addLocalFile(filePath, 'baileys_auth_info');
                     fileCount++;
                 }
             }
@@ -77,7 +77,7 @@ async function refreshAuth() {
             // Verify ZIP has the correct folder structure
             const verifyZip = new AdmZip(AUTH_ZIP);
             const zipEntries = verifyZip.getEntries();
-            const hasPrefix = zipEntries.every(e => e.entryName.startsWith(AUTH_DIR + '/'));
+            const hasPrefix = zipEntries.every(e => e.entryName.startsWith('baileys_auth_info/'));
             console.log(` Created ${AUTH_ZIP} with ${fileCount} files`);
             if (!hasPrefix) {
                 console.warn('WARNING: ZIP entries missing baileys_auth_info/ prefix — extraction will fail on server!');

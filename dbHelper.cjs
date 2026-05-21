@@ -204,4 +204,4 @@ async function getOverdueCustomers(daysOverdue = 7) {
     }
 }
 
-module.exports = { searchInventory, getCustomerBalance, getProductsByCategory, getAllCategories, getCustomerByPhone, createOrder, getOrdersByPhone, getOverdueCustomers };
+module.exports = { getPool, searchInventory, getCustomerBalance, getProductsByCategory, getAllCategories, getCustomerByPhone, createOrder, getOrdersByPhone, getOverdueCustomers };
