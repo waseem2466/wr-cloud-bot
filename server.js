@@ -530,7 +530,11 @@ async function connectToWhatsApp() {
 
             let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || '';
 
-            // ── WhatsApp Catalog ORDER handler ──────────────────────────────
+            const isGroup = msg.key.remoteJid?.endsWith('@g.us');
+            const senderJid = isGroup ? (msg.key.participant || msg.key.remoteJid) : msg.key.remoteJid;
+            const replyTo = msg.key.remoteJid;
+
+            if (!senderJid || senderJid === 'status@broadcast' || replyTo === 'status@broadcast') continue;
             const orderMsg = msg.message?.orderMessage;
             if (orderMsg && !isGroup) {
                 knownContacts.add(senderJid);
@@ -633,10 +637,6 @@ async function connectToWhatsApp() {
                     continue;
                 }
             }
-
-            if (senderJid === 'status@broadcast' || replyTo === 'status@broadcast') continue;
-
-            if (senderJid === 'status@broadcast' || replyTo === 'status@broadcast') continue;
 
             console.log(`[Message] from ${senderJid}: "${text}"`);
 
