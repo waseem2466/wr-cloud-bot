@@ -368,9 +368,9 @@ RESPONSE STYLE:
 
     text = cleanText;
 
-    // Step 2: Provider chain
-    const allProviders = ['gemini', 'groq', 'openrouter'];
-    let chain = mode === 'auto' ? ['gemini', 'groq', 'openrouter'] : [mode, ...allProviders.filter(p => p !== mode)];
+    // Step 2: Provider chain (Groq primary — fast & free)
+    const allProviders = ['groq', 'gemini', 'openrouter'];
+    let chain = mode === 'auto' ? ['groq', 'gemini', 'openrouter'] : [mode, ...allProviders.filter(p => p !== mode)];
 
     console.log(`[AI] Provider chain: ${chain.join(' -> ')}`);
 
