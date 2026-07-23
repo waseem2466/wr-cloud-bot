@@ -44,7 +44,12 @@ function hasUsableMessageContent(msg) {
         msg.message?.audioMessage ||
         msg.message?.documentMessage ||
         msg.message?.stickerMessage ||
-        msg.message?.videoMessage
+        msg.message?.videoMessage ||
+        msg.message?.orderMessage ||          // WhatsApp Catalog order
+        msg.message?.productMessage ||        // Product shared from catalog
+        msg.message?.interactiveResponseMessage || // Button/list reply
+        msg.message?.listResponseMessage ||   // List selection reply
+        msg.message?.buttonsResponseMessage   // Button reply
     );
 }
 
@@ -525,9 +530,71 @@ async function connectToWhatsApp() {
 
             let text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || '';
 
-            const isGroup = msg.key.remoteJid?.endsWith('@g.us');
-            const senderJid = isGroup ? (msg.key.participant || msg.key.remoteJid) : msg.key.remoteJid;
-            const replyTo = msg.key.remoteJid;
+            // ── WhatsApp Catalog ORDER handler ──────────────────────────────
+            const orderMsg = msg.message?.orderMessage;
+            if (orderMsg && !isGroup) {
+                knownContacts.add(senderJid);
+                try {
+                    const products = orderMsg.products || [];
+                    const token = orderMsg.token || '';
+                    const currency = orderMsg.currency || 'LKR';
+                    let orderTotal = 0;
+                    let orderLines = products.map(p => {
+                        const price = (p.retailerProductId || '') ? `Rs. ${(p.price / 1000).toFixed(2)}` : 'N/A';
+                        const lineTotal = p.price ? (p.price / 1000) * p.quantity : 0;
+                        orderTotal += lineTotal;
+                        return `• ${p.name} × ${p.quantity} — ${price}`;
+                    }).join('\n');
+
+                    // Try to save as an order in the DB
+                    const customerPhone = extractPhoneFromJid(senderJid);
+                    const customer = await getCustomerByPhone(customerPhone).catch(() => null);
+                    const customerName = customer?.name || `Customer (${customerPhone})`;
+
+                    const confirmMsg = `🛒 *New Catalog Order Received!*\n\n` +
+                        `👤 From: ${customerName}\n` +
+                        `📦 Items:\n${orderLines}\n\n` +
+                        `💰 Est. Total: Rs. ${orderTotal.toFixed(2)}\n\n` +
+                        `✅ Thank you! We'll confirm your order shortly.\n` +
+                        `📞 Questions? Call us anytime.`;
+
+                    await sendWithTimeout(sock, replyTo, { text: confirmMsg }, { quoted: msg });
+
+                    // Notify owner
+                    const ownerJid = '94719336848@s.whatsapp.net';
+                    const ownerAlert = `🛍️ *CATALOG ORDER*\n\n👤 ${customerName} (${customerPhone})\n\n${orderLines}\n\n💰 Total: Rs. ${orderTotal.toFixed(2)}`;
+                    await sendWithTimeout(sock, ownerJid, { text: ownerAlert }).catch(() => {});
+
+                    console.log(`[Catalog] Order from ${customerPhone}: ${products.length} items, Rs. ${orderTotal.toFixed(2)}`);
+                } catch(e) {
+                    console.error('[Catalog] Order error:', e.message);
+                    await sendWithTimeout(sock, replyTo, { text: '✅ Order received! We will contact you soon.' }, { quoted: msg });
+                }
+                continue;
+            }
+
+            // ── WhatsApp Product SHARE handler ──────────────────────────────
+            const productMsg = msg.message?.productMessage;
+            if (productMsg && !isGroup) {
+                knownContacts.add(senderJid);
+                const product = productMsg.product;
+                const pName = product?.title || product?.name || 'this product';
+                const pPrice = product?.priceAmount1000 ? `Rs. ${(product.priceAmount1000 / 1000).toFixed(2)}` : '';
+                const reply = `🏷️ *${pName}*${pPrice ? `\n💰 Price: ${pPrice}` : ''}\n\nInterested? Reply *yes* to order or ask us anything!`;
+                await sendWithTimeout(sock, replyTo, { text: reply }, { quoted: msg });
+                console.log(`[Catalog] Product share: ${pName}`);
+                continue;
+            }
+
+            // ── Button / List REPLY handler ──────────────────────────────────
+            const listReply = msg.message?.listResponseMessage;
+            const btnReply = msg.message?.buttonsResponseMessage;
+            const interactiveReply = msg.message?.interactiveResponseMessage;
+            if (listReply || btnReply || interactiveReply) {
+                const selectedTitle = listReply?.title || btnReply?.selectedDisplayText || interactiveReply?.nativeFlowResponseMessage?.paramsJson || '';
+                if (selectedTitle) text = selectedTitle;
+            }
+            // ─────────────────────────────────────────────────────────────────
 
             if (!text) {
                 if (msg.message?.audioMessage && !isGroup) {
