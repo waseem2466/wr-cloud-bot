@@ -14,8 +14,10 @@ const DEFAULT_AUTH_FOLDER = 'baileys_auth_info';
 const SEND_API_SECRET = process.env.SEND_API_SECRET || '';
 let activeSock = null;
 let latestQR = null;  // Store latest QR for web display
+let skipAuthRestore = false;  // Set true after /reset-auth to prevent re-extracting expired auth
 
 function restoreAuthFromZip() {
+    if (skipAuthRestore) { console.log('[Auth] Skipping zip restore (auth was reset)'); return; }
     if (fs.existsSync(path.join(AUTH_DIR, 'creds.json'))) return;
     if (!fs.existsSync(AUTH_ZIP)) return;
 
@@ -227,6 +229,7 @@ const server = http.createServer(async (req, res) => {
             console.log('[Auth] Resetting auth session for fresh QR...');
             activeSock = null;
             latestQR = null;
+            skipAuthRestore = true;  // Prevent restoreAuthFromZip from re-extracting expired auth
             // Delete auth folder contents
             if (fs.existsSync(AUTH_DIR)) {
                 const files = fs.readdirSync(AUTH_DIR);
@@ -531,7 +534,7 @@ async function connectToWhatsApp() {
             if (isConflict) console.warn('[WhatsApp] Conflict — another device connected, retrying in 10s...');
             if (isUnauthorized) {
                 console.error('[WhatsApp] Unauthorized (401) — clearing old auth for fresh QR...');
-                // Clear old auth files so next connect generates a fresh QR
+                skipAuthRestore = true;  // Don't restore from auth.bin again
                 try {
                     if (fs.existsSync(AUTH_DIR)) {
                         const files = fs.readdirSync(AUTH_DIR);
