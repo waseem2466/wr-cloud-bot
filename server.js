@@ -221,6 +221,29 @@ const server = http.createServer(async (req, res) => {
         }
     }
 
+    // /reset-auth — clear old auth and force fresh QR
+    if (req.url === '/reset-auth') {
+        try {
+            console.log('[Auth] Resetting auth session for fresh QR...');
+            activeSock = null;
+            latestQR = null;
+            // Delete auth folder contents
+            if (fs.existsSync(AUTH_DIR)) {
+                const files = fs.readdirSync(AUTH_DIR);
+                for (const f of files) {
+                    try { fs.unlinkSync(path.join(AUTH_DIR, f)); } catch(e) {}
+                }
+                console.log(`[Auth] Cleared ${files.length} auth files from ${AUTH_DIR}`);
+            }
+            // Restart connection to generate fresh QR
+            setTimeout(connectToWhatsApp, 1000);
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            return res.end('<html><body style="font-family:sans-serif;text-align:center;padding:40px"><h2 style="color:orange">🔄 Auth Reset!</h2><p>Generating fresh QR code...</p><p><a href="/qr">Go to QR page</a> (wait 10 seconds)</p><script>setTimeout(()=>location.href="/qr",10000)</script></body></html>');
+        } catch(e) {
+            return sendJson(res, 500, { error: 'Reset failed: ' + e.message });
+        }
+    }
+
     // /send endpoint for WhatsApp relay
     if (req.method === 'POST' && req.url === '/send') {
         try {
@@ -506,8 +529,23 @@ async function connectToWhatsApp() {
             const isUnauthorized = statusCode === 401;
             const shouldReconnect = !isUnauthorized && statusCode !== DisconnectReason.loggedOut;
             if (isConflict) console.warn('[WhatsApp] Conflict — another device connected, retrying in 10s...');
-            if (isUnauthorized) console.error('[WhatsApp] Unauthorized (401).');
-            if (shouldReconnect) setTimeout(connectToWhatsApp, isConflict ? 10000 : 3000);
+            if (isUnauthorized) {
+                console.error('[WhatsApp] Unauthorized (401) — clearing old auth for fresh QR...');
+                // Clear old auth files so next connect generates a fresh QR
+                try {
+                    if (fs.existsSync(AUTH_DIR)) {
+                        const files = fs.readdirSync(AUTH_DIR);
+                        for (const f of files) {
+                            try { fs.unlinkSync(path.join(AUTH_DIR, f)); } catch(e) {}
+                        }
+                        console.log(`[Auth] Cleared ${files.length} auth files for fresh start`);
+                    }
+                } catch(e) { console.error('[Auth] Clear failed:', e.message); }
+                // Reconnect after a short delay to generate fresh QR
+                setTimeout(connectToWhatsApp, 5000);
+            } else if (shouldReconnect) {
+                setTimeout(connectToWhatsApp, isConflict ? 10000 : 3000);
+            }
         } else if (connection === 'open') {
             console.log(' Connected to WhatsApp successfully!');
             activeSock = sock;
