@@ -38,6 +38,48 @@ function restoreAuthFromZip() {
     console.log(` Auth session restored at ${AUTH_DIR}!`);
 }
 
+// ═══════════ WhatsApp Session Persistence (survives Koyeb restarts) ═══════════
+let lastCredsSave = 0;
+const CREDS_SAVE_INTERVAL = 30000; // Debounce: max once per 30s
+
+async function saveCredsToDB(credsJson) {
+    try {
+        const { getPool } = require('./dbHelper.cjs');
+        const pool = getPool();
+        await pool.query(
+            `INSERT INTO "WhatsAppSession" (id, creds_json, updated_at)
+             VALUES ('active_session', $1, NOW())
+             ON CONFLICT (id) DO UPDATE SET creds_json = $1, updated_at = NOW()`,
+            [JSON.stringify(credsJson)]
+        );
+        console.log('[Auth] WhatsApp session saved to Neon DB');
+    } catch (e) {
+        console.error('[Auth] Failed to save session to DB:', e.message);
+    }
+}
+
+async function restoreCredsFromDB() {
+    try {
+        const { getPool } = require('./dbHelper.cjs');
+        const pool = getPool();
+        const res = await pool.query(
+            `SELECT creds_json FROM "WhatsAppSession" WHERE id = 'active_session'`
+        );
+        if (res.rows.length > 0 && res.rows[0].creds_json) {
+            fs.mkdirSync(AUTH_DIR, { recursive: true });
+            fs.writeFileSync(
+                path.join(AUTH_DIR, 'creds.json'),
+                JSON.stringify(res.rows[0].creds_json, null, 2)
+            );
+            console.log('[Auth] WhatsApp session restored from Neon DB!');
+            return true;
+        }
+    } catch (e) {
+        console.error('[Auth] Failed to restore session from DB:', e.message);
+    }
+    return false;
+}
+
 function hasUsableMessageContent(msg) {
     return !!(
         msg.message?.conversation ||
@@ -139,6 +181,16 @@ async function migrateSupplierTables() {
             )
         `);
         console.log('[DB] Supplier, StockReceive & InvitedPhone tables ready');
+
+        // WhatsAppSession — persist WhatsApp auth across container restarts
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS "WhatsAppSession" (
+                id TEXT PRIMARY KEY DEFAULT 'active_session',
+                creds_json JSONB NOT NULL,
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        `);
+        console.log('[DB] WhatsAppSession table ready');
     } catch (e) {
         console.error('[DB] Migration error:', e.message);
     }
@@ -183,6 +235,31 @@ const server = http.createServer(async (req, res) => {
             res.end(JSON.stringify({ error: e.message }));
             return;
         }
+    }
+
+    // /ping — lightweight keep-alive for cron-job.org (prevents Koyeb sleep)
+    if (req.url === '/ping') {
+        return sendJson(res, 200, {
+            pong: true,
+            whatsapp: activeSock ? 'connected' : 'disconnected',
+            uptime: Math.floor(process.uptime()) + 's'
+        });
+    }
+
+    // /health — detailed health check endpoint
+    if (req.url === '/health') {
+        const uptimeSec = Math.floor(process.uptime());
+        const hours = Math.floor(uptimeSec / 3600);
+        const mins = Math.floor((uptimeSec % 3600) / 60);
+        return sendJson(res, activeSock ? 200 : 503, {
+            status: activeSock ? 'healthy' : 'degraded',
+            whatsapp: activeSock ? 'connected' : 'disconnected',
+            qrAvailable: !!latestQR,
+            uptime: `${hours}h ${mins}m`,
+            uptimeSeconds: uptimeSec,
+            lastPing: new Date().toISOString(),
+            memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB'
+        });
     }
 
     // /status — debug endpoint
@@ -285,6 +362,38 @@ server.listen(PORT, () => {
     console.log(` Cloud Health Server running on port ${PORT}`);
 });
 
+// ═══════════ Self-Ping Keep-Alive (prevents Koyeb free tier sleep) ═══════════
+const SELF_PING_INTERVAL = 4 * 60 * 1000; // Every 4 minutes
+let selfPingCount = 0;
+
+function startSelfPing() {
+    setInterval(async () => {
+        selfPingCount++;
+        try {
+            // Internal self-ping via HTTP to keep the process alive
+            const pingUrl = `http://localhost:${PORT}/ping`;
+            const resp = await new Promise((resolve, reject) => {
+                const req = http.get(pingUrl, (res) => {
+                    let data = '';
+                    res.on('data', (chunk) => data += chunk);
+                    res.on('end', () => resolve({ status: res.statusCode, data }));
+                });
+                req.on('error', reject);
+                req.setTimeout(10000, () => { req.destroy(); reject(new Error('Self-ping timeout')); });
+            });
+            if (selfPingCount % 15 === 0) { // Log every ~1 hour (15 × 4min = 60min)
+                console.log(`[KeepAlive] Self-ping #${selfPingCount} OK — WhatsApp: ${activeSock ? 'connected' : 'disconnected'}, uptime: ${Math.floor(process.uptime())}s`);
+            }
+        } catch (e) {
+            console.error(`[KeepAlive] Self-ping #${selfPingCount} failed:`, e.message);
+        }
+    }, SELF_PING_INTERVAL);
+    console.log(`[KeepAlive] Self-ping started — every ${SELF_PING_INTERVAL / 1000}s to prevent container sleep`);
+}
+
+// Start self-ping after a short delay to ensure server is ready
+setTimeout(startSelfPing, 5000);
+
 const STOP_WORDS = new Set(['i','a','an','the','is','it','am','to','for','of','in','on','at','by','with','and','or','but','not','do','does','did','have','has','had','can','will','want','need','buy','get','some','please','me','my','you','your','how','much','what','which','where','who','are','this','that','there','here','all','any','each','every','just','now','also','very','too','was','were','been','being','would','could','should','may','might','shall','got','know','like','say','tell','ask','help','check','see','look','give','take','use','make','come','going','out','up','down','off','over','about','than','then','then','price','rate','cost','stock','available','hello','hi','hey','thanks','thank','bye']);
 
 // Per-chat pagination state: chatJid → { category, page, totalPages, products }
@@ -307,13 +416,44 @@ async function buildInventoryContext(text) {
         for (const word of keywords.slice(0, 5)) {
             const products = await searchInventory(word);
             for (const p of products) {
-                if (!results.has(p.name)) results.set(p.name, p);
+                let target = results.get(p.name);
+                if (!target || p.stock > target.stock) results.set(p.name, p);
             }
         }
         if (results.size === 0) return '';
         return [...results.values()].slice(0, 5)
-            .map(p => `- ${p.name}: Rs. ${p.price} (Stock: ${p.stock})`)
+            .map(p => `- ${p.name}: Rs. ${p.price} (Stock: ${p.stock}${p.stock <= 5 ? ' ⚠️ LOW' : ''}) [${p.category || 'general'}]`)
             .join('\n');
+    } catch { return ''; }
+}
+
+async function buildFinancialContext(customer, phone) {
+    try {
+        let c = customer;
+        let balance = null;
+        if (!c && phone) balance = await getCustomerBalance(phone);
+        const name = c?.name || balance?.name;
+        if (!name) return '';
+        const total = c ? c.totalBalance : balance.totalBalance;
+        const paid = c ? c.paidAmount : balance.paidAmount;
+        const outstanding = c ? c.outstandingBalance : balance.outstandingBalance;
+        // Pull recent invoice history to impress the customer with real POS data
+        let recentOrders = '';
+        try {
+            const p = require('./dbHelper.cjs').getPool ? require('./dbHelper.cjs').getPool() : null;
+            if (p) {
+                const res = await p.query(
+                    `SELECT b.total, b.created_at FROM "Bill" b JOIN "Customer" cu ON b.customer_id = cu.id WHERE cu.phone = $1 ORDER BY b.created_at DESC LIMIT 3`,
+                    [String(phone).replace(/[^0-9]/g, '')]
+                );
+                if (res.rows.length) {
+                    recentOrders = 'Recent invoices:\n' + res.rows.map(r =>
+                        `  - Rs. ${r.total} on ${new Date(r.created_at).toLocaleDateString('en-LK')}`
+                    ).join('\n');
+                }
+            }
+        } catch {}
+        return `Customer: ${name}\nTotal credit: Rs. ${total}\nAlready paid: Rs. ${paid}\nOutstanding balance: Rs. ${outstanding}\n${recentOrders}`;
     } catch { return ''; }
 }
 
@@ -427,34 +567,52 @@ async function startAutoBackup(sock) {
 }
 
 // ═══════════ LOW STOCK ALERTS ═══════════
+const alertedLowStock = new Map(); // productId -> { stock, alertedAt }
 async function startLowStockAlerts(sock) {
-    console.log('[LowStock] Low stock alert scheduler started (every 6h)');
+    console.log('[LowStock] Low stock alert scheduler started (once daily)');
     const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD || '5');
     const run = async () => {
         try {
             const p = require('./dbHelper.cjs').getPool ? require('./dbHelper.cjs').getPool() : null;
             if (!p) return;
             const res = await p.query(
-                `SELECT name, stock, category, price FROM "Product" WHERE stock <= $1 ORDER BY stock ASC`,
+                `SELECT id, name, stock, category, price FROM "Product" WHERE stock <= $1 ORDER BY stock ASC`,
                 [LOW_STOCK_THRESHOLD]
             );
-            if (res.rows.length === 0) return;
+            // Items back above threshold → clear alert flag (so a re-drop alerts again)
+            const lowIds = new Set(res.rows.map(r => String(r.id)));
+            for (const id of [...alertedLowStock.keys()]) {
+                if (!lowIds.has(id)) alertedLowStock.delete(id);
+            }
+            // Only NEW drops get alerted — never re-announce the same product at the same/lower stock
+            const newAlerts = [];
+            for (const r of res.rows) {
+                const id = String(r.id);
+                const prev = alertedLowStock.get(id);
+                if (!prev || r.stock < prev.stock) {
+                    newAlerts.push(r);
+                    alertedLowStock.set(id, { stock: r.stock, alertedAt: Date.now() });
+                }
+            }
+            if (newAlerts.length === 0) {
+                console.log('[LowStock] No NEW low stock items — no alert sent');
+                return;
+            }
             const ownerJids = ['94719336848@s.whatsapp.net', '94779336848@s.whatsapp.net'];
-            const itemList = res.rows.map((r, i) =>
+            const itemList = newAlerts.map((r, i) =>
                 `${i + 1}. ${r.name} — *${r.stock} left* (Rs. ${r.price}) [${r.category}]`
             ).join('\n');
-            const msg = `⚠️ *LOW STOCK ALERT*\n\n${res.rows.length} product${res.rows.length > 1 ? 's' : ''} running low:\n\n${itemList}\n\n📉 Threshold: ≤${LOW_STOCK_THRESHOLD} units\n⏰ Checked: ${new Date().toLocaleString('en-LK', { timeZone: 'Asia/Colombo' })}`;
+            const msg = `⚠️ *NEW LOW STOCK ALERTS*\n\n${newAlerts.length} product${newAlerts.length > 1 ? 's' : ''} running low:\n\n${itemList}\n\n📉 Threshold: ≤${LOW_STOCK_THRESHOLD} units\n⏰ ${new Date().toLocaleString('en-LK', { timeZone: 'Asia/Colombo' })}`;
             for (const oj of ownerJids) {
                 try { await sendWithTimeout(sock, oj, { text: msg }); } catch(e) {}
             }
-            console.log(`[LowStock] Alert sent: ${res.rows.length} low stock items`);
+            console.log(`[LowStock] ${newAlerts.length} NEW low-stock alerts sent`);
         } catch (e) {
             console.error('[LowStock] Error:', e.message);
         }
     };
-    // Check every 6 hours
-    setInterval(run, 6 * 60 * 60 * 1000);
-    // First check after 5 minutes of startup
+    // Check once daily + first check shortly after startup
+    setInterval(run, 24 * 60 * 60 * 1000);
     setTimeout(run, 5 * 60 * 1000);
 }
 
@@ -501,6 +659,13 @@ async function connectToWhatsApp() {
     console.log('Starting WR POS Cloud WhatsApp Bot...');
     console.log(`[WhatsApp] Auth directory: ${AUTH_DIR}`);
 
+    // Priority 1: DB persistence (survives Koyeb restarts)
+    if (!fs.existsSync(path.join(AUTH_DIR, 'creds.json'))) {
+        console.log('[Auth] No local creds.json — trying Neon DB restore...');
+        await restoreCredsFromDB();
+    }
+
+    // Priority 2: Fallback to auth.bin zip
     restoreAuthFromZip();
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -515,9 +680,25 @@ async function connectToWhatsApp() {
         markOnlineOnConnect: true
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    // Debounced cred save — local file + Neon DB
+    sock.ev.on('creds.update', async (creds) => {
+        saveCreds();
+        const now = Date.now();
+        if (now - lastCredsSave > CREDS_SAVE_INTERVAL) {
+            lastCredsSave = now;
+            try {
+                const credsPath = path.join(AUTH_DIR, 'creds.json');
+                if (fs.existsSync(credsPath)) {
+                    const credsJson = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+                    await saveCredsToDB(credsJson);
+                }
+            } catch (e) {
+                console.error('[Auth] Debounced DB save error:', e.message);
+            }
+        }
+    });
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
             latestQR = qr;  // Store for /qr web endpoint
@@ -535,6 +716,12 @@ async function connectToWhatsApp() {
             if (isUnauthorized) {
                 console.error('[WhatsApp] Unauthorized (401) — clearing old auth for fresh QR...');
                 skipAuthRestore = true;  // Don't restore from auth.bin again
+                // Clear stale session from DB too
+                try {
+                    const { getPool } = require('./dbHelper.cjs');
+                    await getPool().query(`DELETE FROM "WhatsAppSession" WHERE id = 'active_session'`);
+                    console.log('[Auth] Cleared session from Neon DB');
+                } catch(e) {}
                 try {
                     if (fs.existsSync(AUTH_DIR)) {
                         const files = fs.readdirSync(AUTH_DIR);
@@ -552,10 +739,36 @@ async function connectToWhatsApp() {
         } else if (connection === 'open') {
             console.log(' Connected to WhatsApp successfully!');
             activeSock = sock;
+            latestQR = null;  // Clear QR since we're connected
             startPaymentReminders(sock);
             startDailySummary(sock);
             startAutoBackup(sock);
             startLowStockAlerts(sock);
+
+            // ═══════════ WhatsApp Connection Watchdog ═══════════
+            // Check every 5 min if WA socket is still alive, auto-reconnect if zombie
+            if (!global._waWatchdogRunning) {
+                global._waWatchdogRunning = true;
+                setInterval(() => {
+                    try {
+                        if (activeSock && activeSock.ws) {
+                            const wsState = activeSock.ws.readyState;
+                            // WebSocket states: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+                            if (wsState !== 1) {
+                                console.error(`[Watchdog] WhatsApp WebSocket is dead (state=${wsState}), reconnecting...`);
+                                activeSock = null;
+                                setTimeout(connectToWhatsApp, 3000);
+                            }
+                        } else if (!activeSock) {
+                            console.warn('[Watchdog] No active WhatsApp socket, attempting reconnect...');
+                            setTimeout(connectToWhatsApp, 3000);
+                        }
+                    } catch (e) {
+                        console.error('[Watchdog] Check error:', e.message);
+                    }
+                }, 5 * 60 * 1000); // Every 5 minutes
+                console.log('[Watchdog] WhatsApp connection watchdog started');
+            }
         }
     });
 
@@ -1187,16 +1400,10 @@ async function connectToWhatsApp() {
                 continue;
             }
             // ═══════════ END JOIN GROUP ═══════════
+            // 4b. Live customer financial status (with recent POS invoices)
             let financialContext = '';
             if (intent === 'LOAN_INQUIRY' || intent === 'BALANCE_CHECK') {
-                if (customer) {
-                    financialContext = `Customer: ${customer.name}\nTotal: Rs. ${customer.totalBalance}\nPaid: Rs. ${customer.paidAmount}\nOutstanding: Rs. ${customer.outstandingBalance}`;
-                } else if (phone) {
-                    const balance = await getCustomerBalance(phone);
-                    if (balance) {
-                        financialContext = `Customer: ${balance.name}\nTotal: Rs. ${balance.totalBalance}\nPaid: Rs. ${balance.paidAmount}\nOutstanding: Rs. ${balance.outstandingBalance}`;
-                    }
-                }
+                financialContext = await buildFinancialContext(customer, phone);
             }
 
             // 5. Build live inventory context
