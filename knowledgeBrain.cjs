@@ -29,17 +29,23 @@ function loadLocalKnowledge() {
     return knowledgeCache;
 }
 
+let lastDbLoad = 0;
+
 async function loadDbKnowledge() {
+    if (Date.now() - lastDbLoad < 60000 && dbCache.length > 0) return dbCache;
     const p = typeof dbHelper.getPool === 'function' ? dbHelper.getPool() : null;
-    if (!p) return [];
+    if (!p) return dbCache;
     try {
-        const res = await p.query(`SELECT title, content, category FROM "Knowledge" ORDER BY updated_at DESC`);
+        const queryPromise = p.query(`SELECT title, content, category FROM "Knowledge" ORDER BY updated_at DESC`);
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('DB Timeout')), 2000));
+        const res = await Promise.race([queryPromise, timeoutPromise]);
         dbCache = res.rows.map(r => ({ source: `DB:${r.title} (${r.category})`, content: r.content }));
+        lastDbLoad = Date.now();
         console.log(`[Brain] Loaded ${dbCache.length} records from DB`);
         return dbCache;
     } catch (err) {
-        console.error('[Brain] DB load failed:', err.message);
-        return [];
+        // Soft fallback to avoid delaying AI replies
+        return dbCache;
     }
 }
 
