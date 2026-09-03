@@ -421,8 +421,9 @@ async function buildInventoryContext(text) {
             }
         }
         if (results.size === 0) return '';
+        const wantsExactQty = /\b(how many|count|pieces|pcs|quantity|qty|units|bulk)\b/i.test(text);
         return [...results.values()].slice(0, 5)
-            .map(p => `- ${p.name}: Rs. ${p.price} (Stock: ${p.stock}${p.stock <= 5 ? ' ⚠️ LOW' : ''}) [${p.category || 'general'}]`)
+            .map(p => `- ${p.name}: Rs. ${p.price} (${p.stock > 0 ? (wantsExactQty ? `${p.stock} in stock` : 'In Stock') : 'Out of Stock'}) [${p.category || 'general'}]`)
             .join('\n');
     } catch { return ''; }
 }
@@ -466,6 +467,8 @@ const REMINDER_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours
 const knownContacts = new Set();
 
 async function startPaymentReminders(sock) {
+    if (global._paymentRemindersStarted) return;
+    global._paymentRemindersStarted = true;
     console.log('[Reminder] Payment reminder scheduler started (every 12h)');
     const run = async () => {
         try {
@@ -475,7 +478,6 @@ async function startPaymentReminders(sock) {
                 if (!phone) continue;
                 const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`;
                 if (!knownContacts.has(jid)) {
-                    console.log(`[Reminder] Skipping ${c.name} (${phone}) — never messaged bot`);
                     continue;
                 }
                 const msg = `🔔 *Payment Reminder*\n\nHi ${c.name}, you have an outstanding balance of *Rs. ${c.outstandingBalance}*.\nPaid: Rs. ${c.paidAmount} of Rs. ${c.totalBalance}\n\nPlease settle soon. Bank transfer or in-store. 🏦`;
@@ -491,46 +493,92 @@ async function startPaymentReminders(sock) {
             console.error('[Reminder] Error:', e.message);
         }
     };
-    await run();
     setInterval(run, REMINDER_INTERVAL);
 }
 
-async function startDailySummary(sock) {
-    console.log('[Summary] Daily summary scheduler started (6 AM SL time)');
-    const run = async () => {
-        try {
-            const p = require('./dbHelper.cjs').getPool ? require('./dbHelper.cjs').getPool() : null;
-            if (!p) { console.log('[Summary] Pool not ready'); return; }
-            const twentyFourH = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-            const [bills, newCustomers, lowStock, topProducts] = await Promise.all([
-                p.query(`SELECT COUNT(*) as cnt, COALESCE(SUM(total), 0) as rev FROM "Bill" WHERE created_at >= $1`, [twentyFourH]),
-                p.query(`SELECT COUNT(*) as cnt FROM "Customer" WHERE created_at >= $1`, [twentyFourH]),
-                p.query(`SELECT COUNT(*) as cnt FROM "Product" WHERE stock <= 5`),
-                p.query(`SELECT name, stock, price FROM "Product" ORDER BY stock DESC LIMIT 5`)
-            ]);
-            const orderCount = bills.rows[0]?.cnt || '0';
-            const revenue = Number(bills.rows[0]?.rev || 0);
-            const newCust = newCustomers.rows[0]?.cnt || '0';
-            const lowStockCount = lowStock.rows[0]?.cnt || '0';
-            const topItems = topProducts.rows.map(r => `  • ${r.name} — ${r.stock} left`).join('\n');
-            const now = new Date().toLocaleString('en-LK', { timeZone: 'Asia/Colombo' });
-            const summary = `📊 *DAILY SALES REPORT*\n━━━━━━━━━━━━━━━━━━━━\n📅 ${now}\n\n🧾 *Orders:* ${orderCount}\n💰 *Revenue:* Rs. ${revenue.toLocaleString()}\n👥 *New Customers:* ${newCust}\n⚠️ *Low Stock Items:* ${lowStockCount}\n\n📦 *Top Products:*\n${topItems || '  No data'}\n\n🤖 Bot: ${knownContacts.size} active contacts`;
-            const ownerJids = ['94719336848@s.whatsapp.net', '94779336848@s.whatsapp.net'];
-            for (const oj of ownerJids) {
-                try { await sendWithTimeout(sock, oj, { text: summary }); } catch(e) {}
-            }
-        } catch (e) {
-            console.error('[Summary] Error:', e.message);
+// ═══════════ ONCE-A-DAY STOCK & BUSINESS DIGEST (Strictly 1x per day at 8:00 PM) ═══════════
+let lastDigestDate = '';
+
+async function sendDailyDigest(sock, force = false) {
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Colombo' });
+    if (!force && lastDigestDate === todayStr) {
+        console.log(`[Digest] Already sent today's digest (${todayStr}). Skipping.`);
+        return;
+    }
+
+    try {
+        const p = require('./dbHelper.cjs').getPool ? require('./dbHelper.cjs').getPool() : null;
+        if (!p) { console.log('[Digest] DB Pool not ready'); return; }
+
+        const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD || '5');
+        const twentyFourH = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+        const [bills, newCustomers, lowStockRes, topProductsRes, totalProductsRes] = await Promise.all([
+            p.query(`SELECT COUNT(*) as cnt, COALESCE(SUM(total), 0) as rev FROM "Bill" WHERE created_at >= $1`, [twentyFourH]),
+            p.query(`SELECT COUNT(*) as cnt FROM "Customer" WHERE created_at >= $1`, [twentyFourH]),
+            p.query(`SELECT name, stock, price, category FROM "Product" WHERE stock <= $1 ORDER BY stock ASC LIMIT 10`, [LOW_STOCK_THRESHOLD]),
+            p.query(`SELECT name, stock, price FROM "Product" ORDER BY stock DESC LIMIT 5`),
+            p.query(`SELECT COUNT(*) as total_items, COALESCE(SUM(stock), 0) as total_units FROM "Product"`)
+        ]);
+
+        const orderCount = bills.rows[0]?.cnt || '0';
+        const revenue = Number(bills.rows[0]?.rev || 0);
+        const newCust = newCustomers.rows[0]?.cnt || '0';
+        const lowStockItems = lowStockRes.rows || [];
+        const totalItems = totalProductsRes.rows[0]?.total_items || '0';
+        const totalUnits = totalProductsRes.rows[0]?.total_units || '0';
+        const now = new Date().toLocaleString('en-LK', { timeZone: 'Asia/Colombo' });
+
+        let lowStockSection = '✅ *Stock Health:* All items healthy';
+        if (lowStockItems.length > 0) {
+            lowStockSection = `⚠️ *Low Stock Items (≤${LOW_STOCK_THRESHOLD} units):*\n` +
+                lowStockItems.map((r, i) => `  ${i + 1}. ${r.name} — *${r.stock} left* (Rs. ${r.price})`).join('\n');
         }
-    };
-    const now = new Date();
-    const tomorrow6AM = new Date(now);
-    tomorrow6AM.setDate(now.getDate() + 1);
-    tomorrow6AM.setHours(6, 0, 0, 0);
-    setTimeout(() => { run(); setInterval(run, 24 * 60 * 60 * 1000); }, tomorrow6AM - now);
+
+        const digest = `📊 *DAILY INVENTORY & BUSINESS DIGEST*\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n📅 ${now}\n\n🧾 *Orders Today:* ${orderCount}\n💰 *Revenue:* Rs. ${revenue.toLocaleString()}\n👥 *New Customers:* ${newCust}\n📦 *Catalog:* ${totalItems} SKUs (${totalUnits} total units)\n\n${lowStockSection}\n\n🤖 *WR POS Bot:* Active & Online`;
+
+        const ownerJids = ['94719336848@s.whatsapp.net', '94779336848@s.whatsapp.net'];
+        for (const oj of ownerJids) {
+            try { await sendWithTimeout(sock, oj, { text: digest }); } catch (e) {}
+        }
+        lastDigestDate = todayStr;
+        console.log(`[Digest] Sent once-daily summary for ${todayStr}`);
+    } catch (e) {
+        console.error('[Digest] Error generating daily digest:', e.message);
+    }
+}
+
+async function startOnceDailyDigest(sock) {
+    if (global._dailyDigestSchedulerStarted) return;
+    global._dailyDigestSchedulerStarted = true;
+
+    console.log('[Digest] Once-daily digest scheduler started (Daily at 8:00 PM SL time)');
+
+    function scheduleNextRun() {
+        const now = new Date();
+        const slDateStr = now.toLocaleDateString('en-US', { timeZone: 'Asia/Colombo' });
+        const target = new Date(slDateStr);
+        target.setHours(20, 0, 0, 0); // 8:00 PM
+
+        let delay = target.getTime() - now.getTime();
+        if (delay <= 0) {
+            target.setDate(target.getDate() + 1);
+            delay = target.getTime() - now.getTime();
+        }
+
+        setTimeout(async () => {
+            if (activeSock) await sendDailyDigest(activeSock);
+            scheduleNextRun();
+        }, delay);
+    }
+
+    scheduleNextRun();
 }
 
 async function startAutoBackup(sock) {
+    if (global._autoBackupSchedulerStarted) return;
+    global._autoBackupSchedulerStarted = true;
+
     console.log('[Backup] Auto-backup scheduler started (daily at 3 AM SL time)');
     const TABLES = ['Product', 'Customer', 'Bill', 'BillItem', 'GroupProduct'];
     const run = async () => {
@@ -553,10 +601,6 @@ async function startAutoBackup(sock) {
             console.log(`[Backup] Sent backup summary (${totalRows} total rows)`);
         } catch (e) {
             console.error('[Backup] Error:', e.message);
-            const ownerJids = ['94719336848@s.whatsapp.net', '94779336848@s.whatsapp.net'];
-            for (const oj of ownerJids) {
-                try { await sendWithTimeout(sock, oj, { text: `⚠️ *Backup Failed*\n\nError: ${e.message}\nPlease check Koyeb logs.` }); } catch(e2) {}
-            }
         }
     };
     const now = new Date();
@@ -564,56 +608,6 @@ async function startAutoBackup(sock) {
     next3AM.setDate(now.getDate() + 1);
     next3AM.setHours(3, 0, 0, 0);
     setTimeout(() => { run(); setInterval(run, 24 * 60 * 60 * 1000); }, next3AM - now);
-}
-
-// ═══════════ LOW STOCK ALERTS ═══════════
-const alertedLowStock = new Map(); // productId -> { stock, alertedAt }
-async function startLowStockAlerts(sock) {
-    console.log('[LowStock] Low stock alert scheduler started (once daily)');
-    const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD || '5');
-    const run = async () => {
-        try {
-            const p = require('./dbHelper.cjs').getPool ? require('./dbHelper.cjs').getPool() : null;
-            if (!p) return;
-            const res = await p.query(
-                `SELECT id, name, stock, category, price FROM "Product" WHERE stock <= $1 ORDER BY stock ASC`,
-                [LOW_STOCK_THRESHOLD]
-            );
-            // Items back above threshold → clear alert flag (so a re-drop alerts again)
-            const lowIds = new Set(res.rows.map(r => String(r.id)));
-            for (const id of [...alertedLowStock.keys()]) {
-                if (!lowIds.has(id)) alertedLowStock.delete(id);
-            }
-            // Only NEW drops get alerted — never re-announce the same product at the same/lower stock
-            const newAlerts = [];
-            for (const r of res.rows) {
-                const id = String(r.id);
-                const prev = alertedLowStock.get(id);
-                if (!prev || r.stock < prev.stock) {
-                    newAlerts.push(r);
-                    alertedLowStock.set(id, { stock: r.stock, alertedAt: Date.now() });
-                }
-            }
-            if (newAlerts.length === 0) {
-                console.log('[LowStock] No NEW low stock items — no alert sent');
-                return;
-            }
-            const ownerJids = ['94719336848@s.whatsapp.net', '94779336848@s.whatsapp.net'];
-            const itemList = newAlerts.map((r, i) =>
-                `${i + 1}. ${r.name} — *${r.stock} left* (Rs. ${r.price}) [${r.category}]`
-            ).join('\n');
-            const msg = `⚠️ *NEW LOW STOCK ALERTS*\n\n${newAlerts.length} product${newAlerts.length > 1 ? 's' : ''} running low:\n\n${itemList}\n\n📉 Threshold: ≤${LOW_STOCK_THRESHOLD} units\n⏰ ${new Date().toLocaleString('en-LK', { timeZone: 'Asia/Colombo' })}`;
-            for (const oj of ownerJids) {
-                try { await sendWithTimeout(sock, oj, { text: msg }); } catch(e) {}
-            }
-            console.log(`[LowStock] ${newAlerts.length} NEW low-stock alerts sent`);
-        } catch (e) {
-            console.error('[LowStock] Error:', e.message);
-        }
-    };
-    // Check once daily + first check shortly after startup
-    setInterval(run, 24 * 60 * 60 * 1000);
-    setTimeout(run, 5 * 60 * 1000);
 }
 
 // ═══════════ PRODUCT IMAGE UPLOAD (via WhatsApp) ═══════════
@@ -741,9 +735,8 @@ async function connectToWhatsApp() {
             activeSock = sock;
             latestQR = null;  // Clear QR since we're connected
             startPaymentReminders(sock);
-            startDailySummary(sock);
             startAutoBackup(sock);
-            startLowStockAlerts(sock);
+            startOnceDailyDigest(sock);
 
             // ═══════════ WhatsApp Connection Watchdog ═══════════
             // Check every 5 min if WA socket is still alive, auto-reconnect if zombie
